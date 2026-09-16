@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>skills-management · 改造与功能说明</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #1c2128; --line: #30363d;
+    --fg: #e6edf3; --fg2: #9198a1; --fg3: #6e7681;
+    --accent: #4493f8; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+    --add: #3fb950; --del: #f85149;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--sans); font-size: 15px; line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono { font-family: var(--mono); font-size: 13px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── layout ── */
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 22px 90px; }
+  header.top {
+    position: sticky; top: 0; z-index: 50; backdrop-filter: blur(10px);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+  .bar { max-width: 1080px; margin: 0 auto; padding: 10px 22px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .brand { font-weight: 700; font-size: 15px; letter-spacing: .2px; }
+  .brand small { color: var(--fg3); font-weight: 400; margin-left: 8px; font-family: var(--mono); font-size: 12px; }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+  .tab {
+    appearance: none; background: transparent; border: 1px solid transparent; color: var(--fg2);
+    padding: 5px 11px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 13px;
+  }
+  .tab:hover { color: var(--fg); background: var(--bg2); }
+  .tab[aria-selected="true"] { color: var(--fg); background: var(--bg3); border-color: var(--line); font-weight: 600; }
+
+  section { display: none; padding-top: 34px; }
+  section.on { display: block; animation: fade .18s ease-out; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  h1 { font-size: 27px; margin: 26px 0 6px; letter-spacing: -.02em; }
+  h2 { font-size: 19px; margin: 34px 0 12px; padding-bottom: 7px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 15px; margin: 22px 0 8px; color: var(--fg); }
+  p { margin: 10px 0; }
+  .lead { color: var(--fg2); font-size: 16px; margin-top: 0; }
+  ul { padding-left: 22px; }
+  li { margin: 5px 0; }
+  .muted { color: var(--fg2); }
+  .dim { color: var(--fg3); }
+  .small { font-size: 13px; }
+
+  /* ── cards & tables ── */
+  .card { background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin: 14px 0; }
+  .grid { display: grid; gap: 12px; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); }
+  .g4 { grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--fg2); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: none; }
+  td.num { text-align: right; font-family: var(--mono); }
+
+  /* ── chips & tags ── */
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px;
+          border: 1px solid var(--line); background: var(--bg3); color: var(--fg2); font-size: 11.5px; font-family: var(--mono); }
+  .chip.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+  .chip.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+  .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+  .chip.acc { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+  /* ── metric tiles ── */
+  .tile { background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .tile .k { font-size: 11.5px; color: var(--fg3); text-transform: uppercase; letter-spacing: .05em; }
+  .tile .v { font-size: 24px; font-weight: 700; font-family: var(--mono); margin-top: 3px; letter-spacing: -.02em; }
+  .tile .s { font-size: 12px; color: var(--fg2); margin-top: 2px; }
+  .tile.good .v { color: var(--ok); }
+
+  /* ── timeline / accordion ── */
+  .tl { border-left: 2px solid var(--line); margin: 8px 0 0 6px; padding-left: 20px; }
+  .tl-item { position: relative; margin: 0 0 14px; }
+  .tl-item::before {
+    content: ''; position: absolute; left: -27px; top: 9px; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--bg); border: 2px solid var(--accent);
+  }
+  .tl-item.dot-del::before { border-color: var(--bad); }
+  .tl-item.dot-add::before { border-color: var(--ok); }
+  .tl-item.dot-doc::before { border-color: var(--fg3); }
+  .tl-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; cursor: pointer; }
+  .tl-head .sha { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .tl-head .title { font-weight: 600; }
+  .tl-head .stat { font-family: var(--mono); font-size: 12px; color: var(--fg2); margin-left: auto; }
+  .tl-head .stat i { font-style: normal; color: var(--add); }
+  .tl-head .stat b { font-weight: 400; color: var(--del); }
+  .tl-body { display: none; margin-top: 8px; }
+  .tl-item.open .tl-body { display: block; }
+  .tl-head::after { content: '▸'; color: var(--fg3); font-size: 12px; }
+  .tl-item.open .tl-head::after { content: '▾'; }
+
+  /* ── diff-ish blocks ── */
+  pre { background: var(--bg3); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; overflow: auto; margin: 10px 0; }
+  pre .add { color: var(--add); }
+  pre .del { color: var(--del); }
+  .kv { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px dashed var(--line); font-size: 13.5px; }
+  .kv:last-child { border-bottom: none; }
+  .kv b { font-weight: 600; min-width: 132px; color: var(--fg2); }
+
+  /* ── feature filter ── */
+  .filterbar { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 4px; }
+  .filterbar .tab { border: 1px solid var(--line); }
+  .feat { display: none; }
+  .feat.on { display: block; }
+  .feat h3 { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .feat .why { color: var(--fg2); font-size: 13.5px; margin: 6px 0 0; }
+  .feat ul { margin: 8px 0 0; }
+
+  /* ── api explorer ── */
+  .api-list { display: flex; flex-direction: column; gap: 6px; }
+  .api-btn {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; cursor: pointer;
+    background: var(--bg2); border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px;
+    color: var(--fg); font: inherit; font-size: 13.5px;
+  }
+  .api-btn:hover { background: var(--bg3); }
+  .api-btn[aria-expanded="true"] { border-color: var(--accent); background: var(--bg3); }
+  .api-btn .m { font-family: var(--mono); font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 5px; }
+  .m.get { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+  .m.post { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+  .m.put { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+  .m.del { color: var(--bad); background: color-mix(in srgb, var(--bad) 15%, transparent); }
+  .api-btn .p { font-family: var(--mono); font-size: 12.5px; }
+  .api-btn .d { margin-left: auto; color: var(--fg3); font-size: 12.5px; }
+  .api-detail { display: none; padding: 4px 2px 10px 8px; }
+  .api-detail.on { display: block; }
+
+  /* ── architecture ── */
+  .arch { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; }
+  .box { border: 1px solid var(--line); border-radius: 11px; padding: 13px 15px; background: var(--bg2); }
+  .box > .lbl { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--fg3); margin-bottom: 8px; }
+  .box.host { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  .box.client { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+  .box.file { border-style: dashed; }
+  .flow { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+  .flow div { display: flex; gap: 8px; align-items: baseline; }
+  .flow .arrow { color: var(--fg3); font-family: var(--mono); }
+  .note { border-left: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent);
+          padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+  .note.danger { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); }
+  .note.ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+  .note b { color: var(--fg); }
+
+  button.copy {
+    background: var(--bg3); color: var(--fg2); border: 1px solid var(--line); border-radius: 7px;
+    padding: 2px 8px; font: inherit; font-size: 11.5px; cursor: pointer; font-family: var(--mono);
+  }
+  button.copy:hover { color: var(--fg); border-color: var(--fg3); }
+  .cmdline { display: flex; align-items: center; gap: 10px; background: var(--bg3); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin: 10px 0; }
+  .cmdline code { flex: 1; color: var(--fg); user-select: all; }
+  footer { border-top: 1px solid var(--line); margin-top: 44px; padding-top: 16px; color: var(--fg3); font-size: 12.5px; }
+  @media print {
+    header.top { position: static; } section { display: block !important; page-break-inside: avoid; }
+    .tabs, .api-btn .d, button.copy { display: none; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <span class="brand">skills-management <small>0.7.0-local</small></span>
+    <nav class="tabs" role="tablist" id="tabs">
+      <button class="tab" role="tab" data-panel="overview">总览</button>
+      <button class="tab" role="tab" data-panel="changes">改了什么</button>
+      <button class="tab" role="tab" data-panel="features">功能</button>
+      <button class="tab" role="tab" data-panel="arch">工作原理</button>
+      <button class="tab" role="tab" data-panel="api">API</button>
+      <button class="tab" role="tab" data-panel="audit">安全审计</button>
+      <button class="tab" role="tab" data-panel="verify">验证</button>
+      <button class="tab" role="tab" data-panel="install">安装</button>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ══════════════ 总览 ══════════════ -->
+<section id="panel-overview">
+  <h1>这个插件现在是什么</h1>
+  <p class="lead">上游 <code>@weibaohui/skills-management@0.6.1</code> 的<b>本地化 · 硬化 · 加固版</b>：一个页面管理本机编码助手的技能库，外加一个管理 dsh MCP server 的页面。</p>
+
+  <div class="grid g4" style="margin:18px 0">
+    <div class="tile"><div class="k">功能区块</div><div class="v">2</div><div class="s">技能管理 · MCP 管理</div></div>
+    <div class="tile good"><div class="k">运行期依赖</div><div class="v">0</div><div class="s">此前 3 个</div></div>
+    <div class="tile good"><div class="k">测试</div><div class="v">71</div><div class="s">32 + 19 + 20，全绿</div></div>
+    <div class="tile"><div class="k">本地提交</div><div class="v">7</div><div class="s">已与上游历史切离</div></div>
+  </div>
+
+  <h2>三步看清这次改造</h2>
+  <div class="grid g3">
+    <div class="card">
+      <span class="chip bad">删除</span>
+      <h3 style="margin-top:10px">两条联网 / 起进程的链路</h3>
+      <p class="small muted" style="margin-bottom:0">ntd 技能市场（git 克隆外部仓库、把访问令牌拼进远端 URL、定时自动同步）与「分享到 GitCode 官方仓库」（让模型读取本机 PAT 并 POST 出去；配套端点还会 spawn 一个 headless dsh 执行任意提示词）。</p>
+    </div>
+    <div class="card">
+      <span class="chip warn">替换</span>
+      <h3 style="margin-top:10px">三个第三方依赖</h3>
+      <p class="small muted" style="margin-bottom:0"><code>dsh-plugin-kit</code> 随分享功能删除；<code>yaml</code> 换成自写的 frontmatter 读取器；<code>js-tiktoken</code> 移除，开销统计只留精确字符数（并保留可注入钩子）。</p>
+    </div>
+    <div class="card">
+      <span class="chip ok">新增</span>
+      <h3 style="margin-top:10px">MCP 管理</h3>
+      <p class="small muted" style="margin-bottom:0">与「技能管理」同级的独立设置区块：列出 loader 里所有 MCP server、开关、动态挂载新 server。只写本插件自己的一个状态文件，不碰 dsh 的任何配置。</p>
+    </div>
+  </div>
+
+  <h2>当前仓库</h2>
+  <table>
+    <thead><tr><th>文件</th><th>行数</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">src/index.js</td><td class="num">1259</td><td>宿主端：执行器扫描、本地 API、skill provider、frontmatter 读取器、MCP 运行时与路由</td></tr>
+      <tr><td class="mono">src/mcp-manager.js</td><td class="num">425</td><td>MCP 状态存储、输入校验、loader / restrict 的纯逻辑</td></tr>
+      <tr><td class="mono">client/index.js</td><td class="num">1686</td><td>客户端 React 源码：两个设置区块 + 输入框「＋技能」按钮</td></tr>
+      <tr><td class="mono">client/bundle.js</td><td class="num">1805</td><td>构建产物（<code>npm run build:client</code> 生成，勿手改）</td></tr>
+      <tr><td class="mono">test/skills.test.mjs</td><td class="num">716</td><td>宿主面 32 条（含无子进程 / 无网络 / 无第三方 require 守卫）</td></tr>
+      <tr><td class="mono">test/mcp-manager.test.mjs</td><td class="num">437</td><td>MCP 存储、校验、loader/restrict、路由 19 条</td></tr>
+      <tr><td class="mono">test/ui.test.mjs</td><td class="num">262</td><td>客户端面 20 条（含无市场残留 + bundle 新鲜度）</td></tr>
+      <tr><td class="mono">cordis.patch.yml</td><td class="num">13</td><td>把插件行插进宿主 composition</td></tr>
+      <tr><td class="mono">scripts/build-client.mjs</td><td class="num">46</td><td>把 <code>client/index.js</code> 包成 loader 模块</td></tr>
+    </tbody>
+  </table>
+  <p class="small dim">已删除：<code>docs/demo*.gif</code>、<code>client/hooks/*.ts</code>、<code>client/components/*.ts</code>（旧架构死代码）、<code>.github/workflows/publish.yml</code>、<code>src/mcp-profile.js</code>（上一版 MCP 实现）。</p>
+</section>
+
+<!-- ══════════════ 改了什么 ══════════════ -->
+<section id="panel-changes">
+  <h1>7 个提交，改了些什么</h1>
+  <p class="lead">点击任意一条展开细节。原仓库的 <code>.git</code> 已移出到 <code>D:\11dsh\skills-management-upstream-git-backup</code>，当前是全新的本地历史。</p>
+  <div class="tl" id="timeline"></div>
+</section>
+
+<!-- ══════════════ 功能 ══════════════ -->
+<section id="panel-features">
+  <h1>现在的功能清单</h1>
+  <p class="lead">按区块筛选。每项都标了「怎么做的」，方便你判断哪些可以关掉或改掉。</p>
+  <div class="filterbar" id="featfilter">
+    <button class="tab" data-f="all" aria-selected="true">全部</button>
+    <button class="tab" data-f="skills">技能管理</button>
+    <button class="tab" data-f="mcp">MCP 管理</button>
+    <button class="tab" data-f="composer">输入框</button>
+    <button class="tab" data-f="govern">治理 / 开销</button>
+  </div>
+  <div id="featlist"></div>
+</section>
+
+<!-- ══════════════ 工作原理 ══════════════ -->
+<section id="panel-arch">
+  <h1>它是怎么接进 dsh 的</h1>
+  <div class="arch" style="margin-top:16px">
+    <div class="box host">
+      <div class="lbl">宿主进程（插件宿主半）</div>
+      <div class="flow">
+        <div><span class="arrow">·</span><span><code>skills</code> → 注册 1 个 provider，把用户库技能喂给模型</span></div>
+        <div><span class="arrow">·</span><span><code>webServer</code> → 挂 <code>/skills-management/api</code> 路由</span></div>
+        <div><span class="arrow">·</span><span><code>settings</code> → 执行器目录覆盖的持久化</span></div>
+        <div><span class="arrow">·</span><span><code>loader</code> → 枚举 / 挂载 / 卸载 MCP server</span></div>
+        <div><span class="arrow">·</span><span><code>tools</code> + <code>agents</code> → per-agent <code>restrict</code> 停用 MCP</span></div>
+      </div>
+    </div>
+    <div class="box client">
+      <div class="lbl">客户端（浏览器半）</div>
+      <div class="flow">
+        <div><span class="arrow">·</span><span><code>settings.section</code> × 2 → 侧栏「技能管理」「MCP 管理」</span></div>
+        <div><span class="arrow">·</span><span><code>conversation.input.left</code> → 输入框「＋技能」按钮</span></div>
+        <div><span class="arrow">·</span><span><code>locale</code> → zh / en 全量文案</span></div>
+        <div><span class="arrow">·</span><span>只用 ui-theme 的 <code>--dsw-*</code> token，无硬编码颜色</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>两个数据流</h2>
+  <div class="grid g2">
+    <div class="box file">
+      <div class="lbl">技能：读文件系统</div>
+      <div class="flow">
+        <div><span class="arrow">→</span><span>扫描 16 个执行器目录（<code>~/.claude/skills</code> …）</span></div>
+        <div><span class="arrow">→</span><span>读 <code>SKILL.md</code>，自写读取器解析 frontmatter</span></div>
+        <div><span class="arrow">→</span><span>收编：复制进 <code>$DSH_HOME/skills</code></span></div>
+        <div><span class="arrow">→</span><span>治理：改写 <code>disable-model-invocation</code>（原子写）</span></div>
+      </div>
+      <p class="small dim" style="margin-bottom:0">只动技能目录，不碰 dsh 配置。</p>
+    </div>
+    <div class="box file">
+      <div class="lbl">MCP：读 loader，写自己的状态文件</div>
+      <div class="flow">
+        <div><span class="arrow">→</span><span>列表：<code>loader.entries()</code>，所有组合层都可见</span></div>
+        <div><span class="arrow">→</span><span>停用：<code>tools.restrict({ deny })</code>（工具名级）</span></div>
+        <div><span class="arrow">→</span><span>新增：<code>loader.create()</code>，id 前缀 <code>sm-mcp-</code></span></div>
+        <div><span class="arrow">→</span><span>状态：<code>$DSH_HOME/skills-management/mcp.json</code></span></div>
+      </div>
+      <p class="small dim" style="margin-bottom:0">不解析、不改写 dsh 的任何 YAML。</p>
+    </div>
+  </div>
+
+  <h2>MCP 停用为什么不用改配置</h2>
+  <pre><span class="dim">// 1) 从状态里取出被停用的 serverName</span>
+<span class="dim">// 2) 只 deny「当前真实注册」的工具名 —— restrict() 对未知名字会抛错</span>
+const deny = denyNamesForDisabled(disabledNames, tools.schemas())
+<span class="dim">// 3) deny 集合没变就绝不重复 restrict：</span>
+<span class="dim">//    restrict() 会同步触发 tools/change，而监听器又会回到这个函数，</span>
+<span class="dim">//    不比较就会无限递归，把整个进程卡死（参考实现踩过这个坑）</span>
+if (current &amp;&amp; current.deny.join('\0') === deny.join('\0')) return
+<span class="dim">// 4) 有变化才换层：老手 agent 作用域，只影响这一个 agent</span>
+const disposer = agentCtx.get('tools').restrict({ deny })</pre>
+
+  <div class="note">
+    <b>为什么 <code>apply()</code> 必须是同步的？</b> Cordis 把带 prototype 的函数当构造函数，会忽略它返回的 promise。于是 <code>async apply</code> 里 <code>await</code> 之后抛的错会变成 unhandled rejection，可能直接拖垮整个 dsh 进程。所以插件只做同步注册，异步的挂载/restrict 都放在 effect、事件回调或请求里。
+  </div>
+
+  <div class="note ok">
+    <b>能力缺失时降级，不报错。</b> 如果宿主组合里没有 <code>loader</code> / <code>tools</code>，页面显示「能力不可用」并照常列出当前状态，而不是抛错或空白。
+  </div>
+</section>
+
+<!-- ══════════════ API ══════════════ -->
+<section id="panel-api">
+  <h1>HTTP 接口</h1>
+  <p class="lead">全部挂在 <code>/skills-management/api</code> 下，只服务本机（webServer 路由，无独立鉴权）。点击任意一条看请求 / 响应与副作用。</p>
+  <div class="api-list" id="apilist"></div>
+
+  <h2>没有的东西</h2>
+  <table>
+    <thead><tr><th>旧端点</th><th>现在</th><th>原因</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">GET /market/status</td><td><span class="chip bad">404</span></td><td>随 ntd 市场移除</td></tr>
+      <tr><td class="mono">POST /market/sync</td><td><span class="chip bad">404</span></td><td>会联网克隆外部 GitCode 仓库</td></tr>
+      <tr><td class="mono">PUT /market/settings</td><td><span class="chip bad">404</span></td><td>存过访问令牌</td></tr>
+      <tr><td class="mono">POST /share/run</td><td><span class="chip bad">404</span></td><td>会 spawn headless dsh 执行任意提示词</td></tr>
+      <tr><td class="mono">GET /share/run</td><td><span class="chip bad">404</span></td><td>同上</td></tr>
+    </tbody>
+  </table>
+  <p class="small dim">这 5 条都有回归测试守着（断言返回 404）。</p>
+</section>
+
+<!-- ══════════════ 安全审计 ══════════════ -->
+<section id="panel-audit">
+  <h1>安全审计结论</h1>
+  <p class="lead">对上游 0.6.1 全量源码逐文件读过、依赖实际装下来读过之后的结论。</p>
+
+  <div class="note ok">
+    <b>没发现「藏起来的」恶意载荷。</b> 没有 <code>eval</code> / <code>new Function</code> / 混淆代码 / 硬编码外发地址 / 后门凭据 / 读取 SSH 私钥或批量外传环境变量。GitHub workflow 是正规的 npm Trusted Publishing（OIDC，无 <code>NPM_TOKEN</code>）。
+  </div>
+
+  <h2>但有三处真实风险面（都是「功能本身危险」，不是隐藏后门）</h2>
+  <div id="risks"></div>
+
+  <h2>处理结果</h2>
+  <table>
+    <thead><tr><th>风险</th><th>处理</th><th>现状</th></tr></thead>
+    <tbody>
+      <tr><td>share/run 任意提示词执行</td><td>整体删除路由、提示词、客户端抽屉</td><td><span class="chip ok">已消除</span></td></tr>
+      <tr><td>令牌写进 git 远端 URL</td><td>整体删除市场同步与令牌存储</td><td><span class="chip ok">已消除</span></td></tr>
+      <tr><td>三个第三方依赖</td><td>全部移除（含换成自写实现）</td><td><span class="chip ok">依赖为 0</span></td></tr>
+      <tr><td>从 Web UI 写 <code>!!js</code> 标签</td><td>只接受 <code>process.env.NAME</code> 形态，且挂载时解析</td><td><span class="chip ok">已收紧</span></td></tr>
+      <tr><td>改写 dsh 拥有的配置文件</td><td>MCP 改为只写插件自己的状态文件</td><td><span class="chip ok">已移除</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>残留的信任边界（说清楚，不粉饰）</h2>
+  <ul>
+    <li><b>插件本身与 dsh 同权。</b> 通过 <code>dsh plugin add</code> 装进来的代码能以你的身份读写文件。这次改动缩小的是「插件自身代码里有没有危险链路」，不是「插件机制是否隔离」。</li>
+    <li><b>MCP server 是本地程序。</b> 在 MCP 管理页新增一条 stdio server，等于让 dsh 启动你指定的命令——这和手写一行 dsh 配置的权限完全相同，页面只是把它做得更方便。不确定来源的 server 不要加。</li>
+    <li><b>本机 HTTP 路由无独立鉴权。</b> 沿用 webServer 的现有边界；新增/删除/开关 MCP 都走这个路由，能访问该端口就能改 MCP 配置。</li>
+    <li><b>devDependency 仍在。</b> <code>@deepseek-ai/schemastery</code> 是 dsh 官方包，仅供 settings schema 注册，缺失时自动跳过；它不进运行期依赖。</li>
+  </ul>
+</section>
+
+<!-- ══════════════ 验证 ══════════════ -->
+<section id="panel-verify">
+  <h1>怎么验证它是好的</h1>
+
+  <h2>测试矩阵</h2>
+  <div class="grid g3" id="tests"></div>
+
+  <h2>回归守卫（这些断言是防止改坏的）</h2>
+  <table>
+    <thead><tr><th>守卫</th><th>断言</th></tr></thead>
+    <tbody>
+      <tr><td>无子进程 / 无网络</td><td>宿主源码不得出现 <code>node:child_process</code>、<code>execFile</code>、<code>spawn(</code>、<code>node:http(s)</code>、<code>api/market/</code>、<code>api/share/</code></td></tr>
+      <tr><td>无第三方 require</td><td>剥掉注释后，宿主只允许 <code>require('node:…')</code>；唯一例外是 dsh 官方的 schemastery</td></tr>
+      <tr><td>依赖为空</td><td><code>package.json</code> 的 <code>dependencies</code> 必须是 <code>{}</code></td></tr>
+      <tr><td>旧端点消失</td><td>5 条 market / share 路由断言返回 404</td></tr>
+      <tr><td>无市场 / 分享残留</td><td>客户端源码与 locale 键不得再出现市场、分享、profile patch 相关字样</td></tr>
+      <tr><td>bundle 新鲜度</td><td><code>client/bundle.js</code> 必须包含当前 <code>client/index.js</code> 的内容</td></tr>
+      <tr><td>apply 同步</td><td><code>apply()</code> 不得返回 promise（否则可能拖垮进程）</td></tr>
+      <tr><td>restrict 不循环</td><td>deny 集合没变时不得再次调用 <code>tools.restrict</code></td></tr>
+      <tr><td>只写自己的文件</td><td>MCP 增删改之后，临时 DSH_HOME 里只能多出 <code>skills-management/mcp.json</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>自己跑一遍</h2>
+  <div class="cmdline"><code id="cmd-test">node test/skills.test.mjs &amp;&amp; node test/mcp-manager.test.mjs &amp;&amp; node test/ui.test.mjs</code><button class="copy" data-copy="cmd-test">复制</button></div>
+  <div class="cmdline"><code id="cmd-check">npm run check</code><button class="copy" data-copy="cmd-check">复制</button></div>
+  <div class="note">
+    <code>npm test</code>（即 <code>node --test</code>）通过子进程跑测试文件；在受限沙箱里子进程 stdio 管道会被拒（<code>spawn EPERM</code>）。这时直接执行上面第一条即可。
+  </div>
+
+  <h2>装完之后看什么</h2>
+  <ul>
+    <li>设置侧栏出现 <b>两个</b>同级条目：技能管理、MCP 管理</li>
+    <li>技能管理 →「已安装」：应列出本机各执行器与技能数（这台机器实测 17 行）</li>
+    <li>MCP 管理：列出 loader 里所有 MCP server；顶部显示状态文件路径 <code>~/.dsh/skills-management/mcp.json</code></li>
+  </ul>
+</section>
+
+<!-- ══════════════ 安装 ══════════════ -->
+<section id="panel-install">
+  <h1>安装 / 更新</h1>
+  <div class="cmdline"><code id="cmd-add">dsh plugin add "D:\11dsh\skills-management"</code><button class="copy" data-copy="cmd-add">复制</button></div>
+  <p class="small muted">DSH Desktop 的 PATH shim 已预设 <code>DSH_DESKTOP_DEFAULT_PROFILE=desktop</code>，不用再指定 profile。本地目录会被 pnpm 记成 <code>link:</code> 符号链接（不是拷贝）。</p>
+
+  <h2>生效范围</h2>
+  <table>
+    <thead><tr><th>改了什么</th><th>需要做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>cordis.patch.yml</code></td><td>热生效（<code>patchReload: live</code>）</td></tr>
+      <tr><td><code>src/*.js</code>（宿主）</td><td>重启 DSH Desktop</td></tr>
+      <tr><td><code>client/index.js</code> → <code>bundle.js</code></td><td><code>npm run build:client</code> + 重启 + 刷新页面</td></tr>
+    </tbody>
+  </table>
+
+  <h2>验证与卸载</h2>
+  <div class="cmdline"><code id="cmd-why">dsh plugin why @weibaohui/skills-management</code><button class="copy" data-copy="cmd-why">复制</button></div>
+  <div class="cmdline"><code id="cmd-rm">dsh plugin remove @weibaohui/skills-management</code><button class="copy" data-copy="cmd-rm">复制</button></div>
+  <p class="small muted">卸载插件不会删掉 <code>~/.dsh/skills-management/mcp.json</code>（它记着你的 MCP 开关）。想彻底清干净，手动删掉那个目录即可。</p>
+
+  <h2>相关路径</h2>
+  <table>
+    <tbody>
+      <tr><td class="mono">仓库</td><td><code>D:\11dsh\skills-management</code></td></tr>
+      <tr><td class="mono">上游 .git 备份</td><td><code>D:\11dsh\skills-management-upstream-git-backup</code></td></tr>
+      <tr><td class="mono">MCP 状态</td><td><code>~/.dsh/skills-management/mcp.json</code></td></tr>
+      <tr><td class="mono">技能用户库</td><td><code>~/.dsh/skills</code></td></tr>
+      <tr><td class="mono">本页</td><td><code>docs/overview.html</code></td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    <p>本页由仓库内的静态说明生成，数据取自 <code>git log</code>、<code>package.json</code> 与三份测试的实际运行结果（71/71 通过）。</p>
+  </footer>
+</section>
+
+</div>
+
+<script>
+/* ── 数据（与仓库当前状态对齐） ── */
+const COMMITS = [
+  {
+    sha: '9e6cd46', kind: 'del', title: '把上游 fork 成本地版：删掉 ntd 市场与 GitCode 分享',
+    stat: '+1450 / −1870', date: '第 1 步',
+    body: `
+      <p class="small">上游 0.6.1 带了两条危险链路，整体删除而不是加开关：</p>
+      <ul class="small">
+        <li><b>ntd 技能市场</b>：git 克隆外部仓库、<code>authedUrl()</code> 把令牌拼进远端 URL、稀疏检出、启动与每 24h 自动同步、<code>/api/market/*</code> 路由、客户端「市场」Tab 与设置弹窗。</li>
+        <li><b>分享到官方仓库</b>：<code>SHARE_PROMPT_ZH</code> 提示词会指引模型读本机 GitCode PAT 并 POST 到 <code>api.gitcode.com</code>；<code>/api/share/run</code> 还会以任意目录为 cwd spawn 一个 headless dsh 执行任意提示词。</li>
+        <li>顺带删掉：<code>@weibaohui/dsh-plugin-kit</code> 依赖、市场专属的 token 预热、npm 发布 workflow、旧市场截图与 koa 时代死代码。</li>
+      </ul>
+      <p class="small muted"><b>保留</b>：执行器扫描、详情预览、收编进用户库、删除、模型可见性开关、执行器目录设置、开销统计、输入框「＋技能」。</p>`
+  },
+  {
+    sha: 'b98f043', kind: 'doc', title: '加回归守卫：bundle 新鲜度、旧路由 404、无市场残留',
+    stat: '+434 / −71', date: '第 2 步',
+    body: `
+      <ul class="small">
+        <li>宿主：断言源码里没有子进程 / HTTP 客户端 / 已删功能的痕迹。</li>
+        <li>旧端点：5 条 market / share 路由断言返回 404。</li>
+        <li>客户端：locale 键与源码里不得再出现市场、分享字样；<code>bundle.js</code> 必须包含当前 <code>client/index.js</code>。</li>
+      </ul>`
+  },
+  {
+    sha: 'bdd2353', kind: 'del', title: '去掉最后两个运行期依赖：yaml、js-tiktoken',
+    stat: '+394 / −112', date: '第 3 步',
+    body: `
+      <p class="small"><b>yaml → 自写 frontmatter 读取器。</b>不是 YAML 实现，只识别 SKILL.md 实际出现的形状；锚点、流式映射等构造直接跳过，所以不再把不受信任技能目录的内容交给通用 YAML 解析器。验收：本机 10 个真实 SKILL.md 与 <code>yaml.parse</code> 差分，<code>name</code>/<code>description</code>/正文逐字节一致，另有 25 条构造用例。</p>
+      <p class="small">过程中抓到并修掉 3 个自造 bug：引号里的 <code>"false"</code> 被误判成布尔、<code>#</code> 判定过宽吃掉 <code>issue #123 fix</code>、数字被强制转型（<code>version: 1.0</code> 现在是字符串）。</p>
+      <p class="small"><b>js-tiktoken → 移除。</b>开销统计保留精确字符数（token 数原本也只是近似值），并留了可注入编码器钩子，想恢复只需装回包并打开两行注释。</p>`
+  },
+  {
+    sha: '9bdb9a6', kind: 'doc', title: '修正安装说明（实测出来的）',
+    stat: '+25 / −3', date: '第 4 步',
+    body: `
+      <p class="small">上游 README 写的 <code>--profile web</code> 在这台机器上不存在（只有 <code>desktop</code>）。实测确认 <code>dsh plugin add &lt;目录&gt;</code> 会把本地目录记成 <code>link:</code> 符号链接，并据此重写了安装、生效范围、验证与卸载章节。</p>`
+  },
+  {
+    sha: '7864452', kind: 'add', title: '新增 MCP 管理（第一版：改写 profile 的 cordis.patch.yml）',
+    stat: '+2309 / −34', date: '第 5 步',
+    body: `
+      <p class="small">第一次实现选择编辑 profile 自己的 patch 文件。它把「只重写自己的标记块、读不回来就不写、不碰有自己条目的文件」都做了，但地基有问题：需要猜活动 profile，还要手写 YAML 进 dsh 拥有的文件。<b>已被最后一步整体替换。</b></p>`
+  },
+  {
+    sha: 'ca14090', kind: 'add', title: '修 MCP：提成同级区块，并推断 profile',
+    stat: '+4809 / −0', date: '第 6 步',
+    body: `
+      <p class="small">两个问题：MCP 原本做在技能页里的页签，改成侧栏同级设置区块；以及真实 Desktop 上出现 HTTP 400——根因是 <code>DSH_DESKTOP_DEFAULT_PROFILE</code> 只导出给终端、宿主进程没有，于是加了多路探测（配置 → 环境变量 → Desktop 状态文件 → 「哪个 profile 装了本插件」）。</p>
+      <p class="small muted">这一步的多路探测随下一版的整体重构一起去掉了。</p>`
+  },
+  {
+    sha: 'fab0dcd', kind: 'add', title: '重构 MCP：改由 loader 驱动 + 插件自有状态文件',
+    stat: '+2705 / −171', date: '第 7 步（当前）',
+    body: `
+      <p class="small">按参考实现 <code>dsh-skills-mcp-group-manager</code> 重做，<b>完全不碰 dsh 的任何配置文件</b>：</p>
+      <table class="small">
+        <thead><tr><th>能力</th><th>实现</th></tr></thead>
+        <tbody>
+          <tr><td>列表</td><td><code>ctx.loader.entries()</code> —— 运行期真源，bundle / patch / preset 任何层都可见，零解析</td></tr>
+          <tr><td>停用</td><td>per-agent <code>tools.restrict({ deny })</code>，只 deny 真实注册的工具名</td></tr>
+          <tr><td>新增/删除</td><td><code>loader.create()</code> / <code>remove()</code> 挂真实 loader 条目（id 前缀 <code>sm-mcp-</code>），立即生效无需重启</td></tr>
+          <tr><td>持久化</td><td><code>$DSH_HOME/skills-management/mcp.json</code>，原子写 + 串行化 + 损坏即当空</td></tr>
+        </tbody>
+      </table>
+      <p class="small">同时删掉 <code>src/mcp-profile.js</code> 及其 21 条测试、profile 下拉、编辑弹窗；<code>apply()</code> 保持同步；缺 loader / tools 时降级为「能力不可用」。</p>`
+  }
+];
+
+const FEATURES = [
+  { cat: 'skills', name: '全来源扫描', how: '遍历 16 个执行器定义（DSH / Claude Code / ZCode / Codex / WorkBuddy / Agents …），跟随符号链接并做环检测，跳过 .git 与 node_modules。',
+    why: '只想看你关心的来源？执行器目录设置里可以逐个停用。' },
+  { cat: 'skills', name: '技能详情与文件预览', how: '读 SKILL.md 全文（frontmatter 与正文分离）、列出目录内所有文件并可按类型预览。' },
+  { cat: 'skills', name: '一键收编进 DSH 用户库', how: '把任意来源的技能目录复制到 $DSH_HOME/skills，符号链接目标会被实体化，保证新副本自包含。', why: '这是技能能对模型生效的路径：装进用户库后 skill 工具才调得到。' },
+  { cat: 'skills', name: '删除技能', how: '按来源删除；显式标记 readOnly 的来源拒绝删除。删除用户库技能会刷新 provider。' },
+  { cat: 'skills', name: '执行器目录管理', how: '内置来源可改目录、可停用；可新增自定义来源；「恢复默认」整体清空。走宿主 settings 服务持久化，改完即生效。' },
+  { cat: 'skills', name: '全库搜索与排序', how: '跨所有来源按名称 / 描述 / 关键词过滤；可按注入开销排序；长列表分页渲染避免一次性挂载。' },
+  { cat: 'mcp', name: '列出所有 MCP server', how: '读 loader.entries()，所以来自 bundle、profile patch、agent preset 的 server 都能看到，不解析任何配置文件。' },
+  { cat: 'mcp', name: '逐个停用 / 启用', how: '对每个 agent 下一层 tools.restrict({ deny })，把该 server 的工具从模型工具目录摘掉；server 本身继续运行。deny 集合没变就不重复 restrict，避免 tools/change 递归卡死。',
+    why: '停用状态按 serverName 记在插件状态文件里，所以对「配置来源」的 server 同样有效——这正是它不需要改 dsh 配置的原因。' },
+  { cat: 'mcp', name: '新增 server 并立即挂载', how: '校验后写入状态文件，再用 loader.create() 挂一个真实的 dsh-mcp-client 条目（id 前缀 sm-mcp-），无需重启。支持 stdio（command/args/env/cwd）与 streamable-http（url/headers）、工具调用超时。' },
+  { cat: 'mcp', name: '删除（只限本页新增的）', how: 'loader.remove() 卸载条目并清掉状态；来自组合层的 server 只能开关，删除会返回 409 并提示改你自己的配置。' },
+  { cat: 'mcp', name: '显示连接与工具数', how: '从 loader 条目判断是否 live、从 tools.schemas() 数出该命名空间下真实工具数；未连接的行会标出来。' },
+  { cat: 'mcp', name: '环境变量不落盘明文', how: 'env / headers 里写 KEY=${VAR} 存成 process.env 引用，挂载时才解析；只接受这一种表达式形态（从 Web UI 写任意 !!js 等于在宿主进程里执行代码）。', why: '变量未设置时该键被跳过，而不是把 process.env.X 这串文字当密码传给 server。' },
+  { cat: 'composer', name: '输入框「＋技能」按钮', how: '在输入框左侧插一个 chip，点开自带搜索框的候选浮层（候选来自宿主技能注册表），选中即把 /技能名 写进草稿。支持 ↑/↓/Enter/Esc 与 IME 组词保护。' },
+  { cat: 'govern', name: '模型可见性治理', how: '切换 dsh 原生 frontmatter 键 disable-model-invocation，覆盖用户库与 ~/.agents/skills；原子写回，其余键与正文原样保留。' },
+  { cat: 'govern', name: '注入开销统计', how: '卡片与详情显示「名称+描述」的字符数（截断前全文），可按字符排序，没有词表时只出字符数。' },
+  { cat: 'govern', name: '失败即降级', how: 'entry 缺失、frontmatter 畸形、缺 loader/tools 服务都不会让页面失败：列表照常显示，操作给出确定性错误。' }
+];
+
+const APIS = [
+  { m: 'GET', p: '/skills-management/api', d: '用户库技能列表', detail: '返回 { installed: [...] }：每个技能的 name、截断描述、路径、文件数、总大小、修改时间与字符数。',
+    res: `{ "installed": [ { "name": "find-skills", "description": "Helps users discover…",
+                    "path": "C:\\\\Users\\\\…\\\\.dsh\\\\skills\\\\find-skills",
+                    "fileCount": 1, "totalSize": 1234, "chars": 214 } ] }` },
+  { m: 'GET', p: '/api/executors', d: '执行器来源与技能', detail: '?mode=summary 只返回计数（首屏用）；?executor=<key> 返回单个来源的完整技能列表（点进去时用）。',
+    res: `{ "executors": [ { "key": "dsh", "label": "DSH", "dirExists": true,
+                      "skillCount": 0, "locked": true },
+                    { "key": "claudecode", "label": "Claude Code", "skillCount": 1, "skills": [...] } ] }` },
+  { m: 'GET', p: '/api/detail', d: '技能详情', detail: '参数 name 与可选 executor。返回 frontmatter、正文、文件清单、大小与开销统计。跨界路径会被拒绝。' },
+  { m: 'GET', p: '/api/file', d: '单文件预览', detail: '参数 name、path、executor。按扩展名给 content-type；路径必须落在该技能目录内（有穿越防护）。' },
+  { m: 'POST', p: '/api/install', d: '收编到用户库', detail: 'body { name, from, overwrite? }。from 现在必填——市场没了，没有别的来源可选。已存在且未 overwrite 时返回 400。', req: `{ "name": "handy", "from": "claudecode", "overwrite": false }` },
+  { m: 'DELETE', p: '/api', d: '删除技能', detail: 'body { name, executor? }。executor 省略时作用在用户库；只读来源返回 400。' },
+  { m: 'PUT', p: '/api/invocation', d: '模型可见性开关', detail: 'body { name, modelInvocable }。解析顺序：用户库优先，找不到再查 ~/.agents/skills。写入 dsh 原生键 disable-model-invocation，原子写回。' },
+  { m: 'GET', p: '/api/executor-settings', d: '执行器目录设置（读）', detail: '返回全部内置来源（含被停用的，UI 置灰）与自定义来源，每行带 locked / managedByConfig / disabled / overridden 标记。' },
+  { m: 'PUT', p: '/api/executor-settings', d: '执行器目录设置（写）', detail: '整体替换 body { dirs, disabled, extra }。逐行校验：dsh 锁定不可改、key 必须 kebab、目录非空、key 不重复。校验失败 400，持久化在校验之后。',
+    req: `{ "dirs": { "codex": "~/.codex/skills" }, "disabled": ["kilo"], "extra": [] }` },
+  { m: 'GET', p: '/api/mcp', d: 'MCP server 列表', detail: '从 loader 枚举所有 MCP server，join 本插件状态。同时返回 stateFile、loader/mount/restrict 能力标记。',
+    res: `{ "servers": [ { "serverName": "github", "source": "configured",
+                    "entryId": "mcp-github", "transport": "stdio",
+                    "enabled": true, "live": true, "toolCount": 2,
+                    "command": "npx", "args": ["-y", "…"] } ],
+  "stateFile": "~\\\\.dsh\\\\skills-management\\\\mcp.json",
+  "loaderAvailable": true, "mountAvailable": true, "restrictAvailable": true }` },
+  { m: 'POST', p: '/api/mcp', d: '新增 MCP server', detail: '校验后写入状态并 loader.create() 挂载，立即生效。serverName 重复、或与组合层已有的重名都会 409。',
+    req: `{ "serverName": "local", "transport": "stdio",
+  "command": "npx", "args": ["-y", "some-mcp-server"],
+  "env": { "TOKEN": "\${MY_TOKEN}" }, "toolCallTimeoutMs": 60000 }`,
+    res: `201 { "created": "local", "servers": [ … ] }` },
+  { m: 'PUT', p: '/api/mcp', d: '停用 / 启用', detail: 'body { serverName, enabled }。配置来源的 server 只换 restrict 遮蔽层；本页新增的还会真的卸载/重挂 loader 条目。',
+    req: `{ "serverName": "github", "enabled": false }` },
+  { m: 'DELETE', p: '/api/mcp', d: '删除 MCP server', detail: 'body { serverName }。仅限本页新增的；配置来源的返回 409，未知的返回 404。' }
+];
+
+const RISKS = [
+  { tone: 'danger', title: '/api/share/run 任意提示词执行（最严重）', body:
+    '本地 HTTP 路由、无鉴权。<code>createShareRunJob</code> 会 <code>spawn(dsh, [\'--profile\',\'headless\', prompt], { cwd: 调用方传入的 dir })</code>，或走同进程 agent。配合仓库自带的提示词（要求模型读取 settings.yaml 里的 GitCode PAT 并 POST 到 api.gitcode.com），等于把「读凭据 + 外发」做成了一条现成链路。本机任何进程或网页都能 POST 触发。' },
+  { tone: 'warn', title: '访问令牌被拼进 git 远端 URL', body:
+    '<code>authedUrl()</code> 把令牌以 <code>https://oauth2:&lt;token&gt;@host</code> 塞给 <code>git clone/fetch</code>。虽不落 .git/config，但会短暂出现在进程命令行；令牌本身存在 settings.yaml，且随「启动时同步 / 每 24h 同步」自动使用，用户很难察觉。' },
+  { tone: 'warn', title: '供应链面：三个第三方包', body:
+    '<code>yaml</code>、<code>js-tiktoken</code> 是常规 npm 包，<code>@weibaohui/dsh-plugin-kit</code> 是作者自有包（101 行，代码已读，就是 spawn / 会话执行器）。风险点是「插件通过 <code>dsh plugin add</code> 直接取得与本机同等权限」，而非包内藏毒。' }
+];
+
+const TESTS = [
+  { file: 'test/skills.test.mjs', n: 32, what: '执行器扫描、详情/文件 API、收编与删除、治理键、frontmatter 读取器、开销统计，以及「无子进程 / 无网络 / 无第三方 require」守卫' },
+  { file: 'test/mcp-manager.test.mjs', n: 19, what: '状态存储往返与原子性、损坏降级、输入校验、${VAR} 解析、loader/restrict 纯逻辑，以及用假 loader/tools/agents 跑完整增删改流程' },
+  { file: 'test/ui.test.mjs', n: 20, what: 'locale 双语键集一致、无硬编码颜色、无市场/分享残留、bundle 新鲜度、两个设置区块注册、picker 与表单辅助函数' }
+];
+
+/* ── 渲染 ── */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* tabs */
+const panels = ['overview', 'changes', 'features', 'arch', 'api', 'audit', 'verify', 'install'];
+function show(id, push) {
+  if (!panels.includes(id)) id = 'overview';
+  $$('#tabs .tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.panel === id)));
+  panels.forEach((p) => $('#panel-' + p).classList.toggle('on', p === id));
+  if (push !== false) history.replaceState(null, '', '#' + id);
+  window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+}
+$$('#tabs .tab').forEach((b) => b.addEventListener('click', () => show(b.dataset.panel)));
+window.addEventListener('hashchange', () => show(location.hash.slice(1), false));
+
+/* timeline */
+$('#timeline').innerHTML = COMMITS.map((c, i) => {
+  const cls = c.kind === 'del' ? 'dot-del' : c.kind === 'doc' ? 'dot-doc' : 'dot-add';
+  const [add, del] = c.stat.split(' / ');
+  return `<div class="tl-item ${cls}" data-i="${i}">
+    <div class="tl-head"><span class="sha">${c.sha}</span><span class="title">${esc(c.title)}</span>
+      <span class="date chip">${esc(c.date)}</span>
+      <span class="stat"><i>${esc(add || '')}</i> <b>${esc(del || '')}</b></span></div>
+    <div class="tl-body">${c.body}</div></div>`;
+}).join('');
+$$('#timeline .tl-head').forEach((h) => h.addEventListener('click', () => {
+  const item = h.parentElement;
+  const wasOpen = item.classList.contains('open');
+  $$('#timeline .tl-item').forEach((x) => x.classList.remove('open'));
+  item.classList.toggle('open', !wasOpen);
+}));
+$('#timeline .tl-item').classList.add('open');
+
+/* features */
+$('#featlist').innerHTML = FEATURES.map((f) => `
+  <div class="card feat" data-cat="${f.cat}">
+    <h3>${esc(f.name)}<span class="chip">${ { skills: '技能管理', mcp: 'MCP 管理', composer: '输入框', govern: '治理 / 开销' }[f.cat] }</span></h3>
+    <p class="small" style="margin:4px 0 0"><span class="dim">怎么做的 · </span>${f.how}</p>
+    ${f.why ? `<p class="why"><span class="dim">为什么这么设计 · </span>${f.why}</p>` : ''}
+  </div>`).join('');
+function filterFeat(cat) {
+  $$('#featfilter .tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.f === cat)));
+  $$('#featlist .feat').forEach((el) => el.classList.toggle('on', cat === 'all' || el.dataset.cat === cat));
+}
+$$('#featfilter .tab').forEach((b) => b.addEventListener('click', () => filterFeat(b.dataset.f)));
+filterFeat('all');
+
+/* api explorer */
+$('#apilist').innerHTML = APIS.map((a, i) => {
+  const m = a.m === 'DELETE' ? 'del' : a.m.toLowerCase();
+  return `<div>
+    <button class="api-btn" aria-expanded="false" data-i="${i}">
+      <span class="m ${m}">${a.m}</span><span class="p">${esc(a.p)}</span><span class="d">${esc(a.d)}</span></button>
+    <div class="api-detail" data-i="${i}">
+      <p class="small" style="margin:8px 0 0">${a.detail}</p>
+      ${a.req ? `<div class="small dim" style="margin-top:8px">请求体</div><pre>${esc(a.req)}</pre>` : ''}
+      ${a.res ? `<div class="small dim">响应</div><pre>${esc(a.res)}</pre>` : ''}
+    </div></div>`;
+}).join('');
+$$('.api-btn').forEach((b) => b.addEventListener('click', () => {
+  const i = b.dataset.i;
+  const detail = $(`.api-detail[data-i="${i}"]`);
+  const open = detail.classList.contains('on');
+  $$('.api-detail').forEach((d) => d.classList.remove('on'));
+  $$('.api-btn').forEach((x) => x.setAttribute('aria-expanded', 'false'));
+  if (!open) { detail.classList.add('on'); b.setAttribute('aria-expanded', 'true'); }
+}));
+
+/* audit risks */
+$('#risks').innerHTML = RISKS.map((r) => `
+  <div class="note ${r.tone === 'danger' ? 'danger' : ''}">
+    <b>${esc(r.title)}</b>
+    <p class="small" style="margin:6px 0 0">${r.body}</p>
+  </div>`).join('');
+
+/* tests */
+$('#tests').innerHTML = TESTS.map((t) => `
+  <div class="tile good"><div class="k">${esc(t.file)}</div><div class="v">${t.n}</div>
+    <div class="s">${esc(t.what)}</div></div>`).join('');
+
+/* copy buttons */
+$$('button.copy').forEach((b) => b.addEventListener('click', async () => {
+  const text = $('#' + b.dataset.copy).textContent;
+  try { await navigator.clipboard.writeText(text); b.textContent = '已复制'; }
+  catch { b.textContent = '复制失败'; }
+  setTimeout(() => { b.textContent = '复制'; }, 1400);
+}));
+
+show(location.hash.slice(1) || 'overview', false);
+</script>
+</body>
+</html>

@@ -1,8 +1,10 @@
 # @weibaohui/skills-management（本地版 / local-only fork）
 
-DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有 coding agent 的技能目录（Claude Code、ZCode、Codex、WorkBuddy 等十余个执行器），可预览、一键收编进 DSH 用户库供 `skill` 工具调用；同一页面还有「MCP 管理」，用来增删改 dsh 的 MCP server。
+DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有 coding agent 的技能目录（Claude Code、ZCode、Codex、WorkBuddy 等十余个执行器），可预览、一键收编进 DSH 用户库供 `skill` 工具调用；同级还有「MCP 管理」，用来查看、开关、增删 dsh 的 MCP server。
 
 > 这是上游 `@weibaohui/skills-management@0.6.1` 的**本地化改造版**：已移除「ntd 技能市场（git 仓库同步）」与「分享到 GitCode 官方仓库」两条**联网 / 起子进程**的功能链。运行期第三方依赖为 0、不发任何网络请求、不 spawn 任何子进程。
+
+📄 **可交互说明页**：浏览器打开 [`docs/overview.html`](docs/overview.html) —— 改造全过程、功能清单（可筛选）、工作原理、HTTP 接口（可逐条展开）、安全审计结论、验证方式与安装步骤。纯静态、离线、无外链。
 
 ## 功能
 
@@ -189,6 +191,7 @@ MCP 相关的测试全部用临时 `DSH_HOME` 和假 loader/tools/agents，不�
 | `test/skills.test.mjs` | 宿主面测试（含「无子进程/无网络/无第三方 require」守卫） |
 | `test/mcp-manager.test.mjs` | MCP 存储、校验、loader/restrict 与路由测试 |
 | `test/ui.test.mjs` | 客户端面测试（含「无市场/分享残留 + bundle 新鲜度」守卫） |
+| `docs/overview.html` | 可交互说明页（静态、离线；浏览器直接打开） |
 
 ## 许可
 
