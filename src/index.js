@@ -738,9 +738,12 @@ module.exports = {
       for (const agent of agents.list()) applyMcpRestrictions(agent)
     }
 
-    const isConfiguredServer = (serverName) => mcpManager
-      .configuredServers(serviceOf('loader'))
-      .some((entry) => entry.config.serverName === serverName)
+    /**
+     * Who already owns that serverName in the loader: `undefined` = nobody, so
+     * a mount is safe. A duplicate `serverName` makes `dsh-mcp-client` fail, so
+     * this check is what keeps two MCP plugins from fighting over one server.
+     */
+    const ownerOfServer = (serverName) => mcpManager.mountedBy(serviceOf('loader'), serverName)
 
     async function mountMcpServer(server) {
       if (mountedMcp.has(server.serverName)) return
@@ -748,8 +751,14 @@ module.exports = {
       if (loader === undefined || typeof loader.create !== 'function') {
         throw new Error('the loader service is unavailable, so a new MCP server cannot be mounted')
       }
-      if (isConfiguredServer(server.serverName)) {
-        throw new Error(`MCP server '${server.serverName}' is already configured by a composition layer`)
+      const owner = ownerOfServer(server.serverName)
+      if (owner !== undefined) {
+        const by = owner.plugin !== undefined ? `the plugin '${owner.plugin}'` : 'a composition layer'
+        const error = new Error(
+          `MCP server '${server.serverName}' is already mounted by ${by} (entry '${owner.id}')`
+          + (owner.owner === 'other' ? '; import it after that plugin is disabled, or manage it there' : ''))
+        error.status = 409
+        throw error
       }
       const entryId = mcpManager.MANAGED_ENTRY_PREFIX + server.serverName
       await loader.create({ id: entryId, name: mcpManager.MCP_PLUGIN_NAME, config: mcpManager.mcpClientConfig(server) })
@@ -782,6 +791,35 @@ module.exports = {
         try { await mountMcpServer(server) } catch (error) {
           ctx.logger.warn(`skills-management: mount of '${server.serverName}' failed: ${error && error.message}`)
         }
+      }
+    }
+
+    /** 从其他插件可导入的候选（只读：不写状态、不挂载）。 */
+    const mcpImportSnapshot = async () => {
+      const sources = await mcpManager.readImportCandidates({
+        exclude: (mcpStore.get().servers ?? []).map((server) => server.serverName),
+        takenByOthers: mcpManager.loaderServers(serviceOf('loader'))
+          .filter((entry) => entry.owner !== 'self')
+          .map((entry) => entry.config.serverName),
+      })
+      const importable = sources.flatMap((source) => source.candidates
+        .filter((candidate) => candidate.config !== undefined && candidate.conflict === undefined))
+      return {
+        sources: sources.map((source) => ({
+          ...source,
+          file: displayPath(source.file),
+          candidates: source.candidates.map((candidate) => ({
+            serverName: candidate.serverName,
+            transport: candidate.transport,
+            command: candidate.command,
+            args: candidate.args,
+            url: candidate.url,
+            enabled: candidate.enabled,
+            conflict: candidate.conflict,
+            invalid: candidate.invalid,
+          })),
+        })),
+        importableCount: importable.length,
       }
     }
 
@@ -1231,6 +1269,79 @@ module.exports = {
             return
           }
 
+          // ── MCP：从其他插件导入 server ────────────────────────────────
+          // 别的插件动态挂的 MCP 只存在于它自己的状态文件里；它一被停用，
+          // 那批 server 就随之消失。导入即把定义抄进本插件，改由本插件挂载。
+          if (apiPath === '/skills-management/api/mcp/import') {
+            if (req.method === 'GET') {
+              sendJson(res, 200, await mcpImportSnapshot())
+              return
+            }
+            if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return }
+            const body = await readJsonBody(req)
+            const requested = Array.isArray(body.serverNames) && body.serverNames.length > 0
+              ? body.serverNames.map(String)
+              : null
+            const sources = await mcpManager.readImportCandidates({
+              exclude: (mcpStore.get().servers ?? []).map((server) => server.serverName),
+              takenByOthers: (mcpManager.loaderServers(serviceOf('loader')) ?? [])
+                .filter((entry) => entry.owner !== 'self')
+                .map((entry) => entry.config.serverName),
+            })
+            const picked = []
+            for (const source of sources) {
+              for (const candidate of source.candidates) {
+                if (candidate.config === undefined || candidate.conflict !== undefined) continue
+                if (requested !== null && !requested.includes(candidate.serverName)) continue
+                picked.push(candidate)
+              }
+            }
+            if (picked.length === 0) {
+              // 同一个端点不该有时 200 有时 201：POST 一律 201
+              sendJson(res, 201, { imported: [], skipped: [], ...mcpSnapshot(), ...(await mcpImportSnapshot()) })
+              return
+            }
+            const imported = []
+            const skipped = []
+            await withMcpLock(async () => {
+              const state = mcpStore.get()
+              const servers = [...(state.servers ?? [])]
+              for (const candidate of picked) {
+                const server = { ...candidate.config, enabled: candidate.enabled !== false }
+                servers.push(server)
+                await mcpStore.replace({ ...state, servers })
+                try {
+                  await mountMcpServer(server)
+                  imported.push(server.serverName)
+                } catch (error) {
+                  // 挂不上就把它留在状态里但标记未启用，别假装成功
+                  ctx.logger.warn(`skills-management: imported '${server.serverName}' could not be mounted: ${error && error.message}`)
+                  const current = mcpStore.get()
+                  await mcpStore.replace({
+                    ...current,
+                    servers: (current.servers ?? []).map((entry) => (
+                      entry.serverName === server.serverName ? { ...entry, enabled: false } : entry)),
+                    disabled: [...new Set([...disabledServerNames(), server.serverName])],
+                  })
+                  skipped.push({ serverName: server.serverName, reason: String(error && error.message) })
+                  if (body.keepDisabledOnFailure !== true) {
+                    const cleaned = mcpStore.get()
+                    await mcpStore.replace({
+                      ...cleaned,
+                      servers: (cleaned.servers ?? []).filter((entry) => entry.serverName !== server.serverName),
+                      disabled: disabledServerNames().filter((name) => name !== server.serverName),
+                    })
+                  }
+                }
+              }
+            })
+            applyMcpRestrictionsToAll()
+            // 两个列表都给：`servers` 是导入后的 MCP 列表（客户端直接渲染），
+            // `sources` 是剩下还没导入的候选
+            sendJson(res, 201, { imported, skipped, ...mcpSnapshot(), ...(await mcpImportSnapshot()) })
+            return
+          }
+
           // ── MCP 管理：/skills-management/api/mcp ──────────────────────
           // 全部基于 loader + 本插件状态文件：不解析、不改写任何 dsh 配置。
           if (apiPath === '/skills-management/api/mcp') {
@@ -1289,8 +1400,10 @@ module.exports = {
                   error.status = 409
                   throw error
                 }
-                if (isConfiguredServer(input.serverName)) {
-                  const error = new Error(`MCP server '${input.serverName}' is already configured by a composition layer`)
+                if (ownerOfServer(input.serverName) !== undefined) {
+                  const owner = ownerOfServer(input.serverName)
+                  const by = owner.plugin !== undefined ? `the plugin '${owner.plugin}'` : 'a composition layer'
+                  const error = new Error(`MCP server '${input.serverName}' is already mounted by ${by}`)
                   error.status = 409
                   throw error
                 }
@@ -1313,11 +1426,16 @@ module.exports = {
               const state = mcpStore.get()
               const owned = (state.servers ?? []).some((server) => server.serverName === serverName)
               if (!owned) {
+                const owner = ownerOfServer(serverName)
+                const removable = owner !== undefined && owner.owner === 'self'
+                const by = owner === undefined ? undefined
+                  : owner.plugin !== undefined ? `the plugin '${owner.plugin}'` : 'a composition layer'
                 const error = new Error(
-                  isConfiguredServer(serverName)
-                    ? `MCP server '${serverName}' comes from a composition layer and cannot be removed here; disable it instead`
-                    : `MCP server '${serverName}' is not managed by this plugin`)
-                error.status = isConfiguredServer(serverName) ? 409 : 404
+                  removable ? `MCP server '${serverName}' is not tracked by this plugin`
+                    : owner !== undefined
+                      ? `MCP server '${serverName}' is mounted by ${by} and cannot be removed here`
+                      : `MCP server '${serverName}' is not managed by this plugin`)
+                error.status = owner !== undefined ? 409 : 404
                 throw error
               }
               await unmountMcpServer(serverName)

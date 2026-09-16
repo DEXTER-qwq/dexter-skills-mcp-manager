@@ -186,6 +186,122 @@ test('configuredServers reads the loader and skips this plugin\'s own mounts', (
   assert.deepEqual(mcpManager.configuredServers(undefined), [])
 })
 
+test('entryOwner tells composed rows, ours, and another plugin\'s apart', () => {
+  // a composed row: plain human-chosen id
+  assert.deepEqual(mcpManager.entryOwner('mcp-github'), { owner: undefined })
+  assert.deepEqual(mcpManager.entryOwner(''), { owner: undefined })
+  assert.deepEqual(mcpManager.entryOwner(undefined), { owner: undefined })
+  // ours
+  assert.equal(mcpManager.entryOwner('sm-mcp-local').owner, 'self')
+  // another MCP plugin's runtime mount — the case that regressed in the first
+  // version, where it was mislabelled "configured" (and so shown as non-removable)
+  const foreign = mcpManager.entryOwner('msm-mcp-ida-pro-mcp')
+  assert.equal(foreign.owner, 'other')
+  assert.equal(foreign.prefix, 'msm-mcp-')
+  assert.equal(foreign.plugin, 'dsh-skills-mcp-group-manager')
+})
+
+test('mountedBy finds the owner of a serverName, whoever mounted it', () => {
+  const loader = {
+    entries: () => [
+      entry('mcp-github', 'github'),
+      entry('msm-mcp-ida', 'ida-pro-mcp'),
+      entry('sm-mcp-mine', 'mine'),
+    ],
+  }
+  assert.equal(mcpManager.mountedBy(loader, 'github').owner, undefined)
+  assert.equal(mcpManager.mountedBy(loader, 'ida-pro-mcp').owner, 'other')
+  assert.equal(mcpManager.mountedBy(loader, 'mine').owner, 'self')
+  assert.equal(mcpManager.mountedBy(loader, 'nope'), undefined, 'unknown name = nobody owns it')
+})
+
+test('a foreign mount is listed read-only, not as a removable row', () => {
+  const loader = { entries: () => [entry('msm-mcp-ida', 'ida-pro-mcp')] }
+  const rows = mcpManager.listServers(loader, { version: 1, disabled: [], servers: [] }, [])
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].source, 'foreign')
+  assert.equal(rows[0].removable, false)
+  assert.equal(rows[0].owner, 'dsh-skills-mcp-group-manager')
+})
+
+// ── importing from another plugin ───────────────────────────────────────
+
+async function withForeignState(state, fn) {
+  return withHome(async (home) => {
+    const dir = join(home, 'mcp-skill-manager')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'state.json'), JSON.stringify(state))
+    return fn(home)
+  })
+}
+
+const FOREIGN_STATE = {
+  groups: [],
+  mcp: [
+    { serverName: 'ida-pro-mcp', transport: 'streamable-http', url: 'http://127.0.0.1:13337/mcp', enabled: true, addedByUser: true },
+    { serverName: 'ssh-mcp-server', transport: 'stdio', command: 'npx', args: ['-y', 'pkg'], env: {}, toolCallTimeoutMs: 30000, enabled: true, addedByUser: true },
+    { serverName: 'from-profile', transport: 'stdio', command: 'x', enabled: true, addedByUser: false },
+  ],
+}
+
+test('readImportCandidates translates another plugin\'s state file', async () => {
+  await withForeignState(FOREIGN_STATE, async () => {
+    const sources = await mcpManager.readImportCandidates()
+    assert.equal(sources.length, 1)
+    assert.equal(sources[0].id, 'dsh-skills-mcp-group-manager')
+    assert.equal(sources[0].available, true)
+    // only addedByUser entries come over; a profile-configured one is not ours to copy
+    assert.deepEqual(sources[0].candidates.map((c) => c.serverName), ['ida-pro-mcp', 'ssh-mcp-server'])
+    const ssh = sources[0].candidates[1]
+    assert.equal(ssh.config.command, 'npx')
+    assert.equal(ssh.config.toolCallTimeoutMs, 30000)
+    assert.equal(ssh.conflict, undefined)
+  })
+})
+
+test('readImportCandidates marks conflicts instead of dropping silently', async () => {
+  await withForeignState(FOREIGN_STATE, async () => {
+    const sources = await mcpManager.readImportCandidates({
+      exclude: ['ssh-mcp-server'],
+      takenByOthers: ['ida-pro-mcp'],
+    })
+    const byName = Object.fromEntries(sources[0].candidates.map((c) => [c.serverName, c]))
+    assert.equal(byName['ssh-mcp-server'].conflict, 'already-managed')
+    assert.equal(byName['ida-pro-mcp'].conflict, 'name-taken')
+  })
+})
+
+test('a missing or unreadable foreign state file is reported, not thrown', async () => {
+  await withHome(async () => {
+    const sources = await mcpManager.readImportCandidates()
+    assert.equal(sources[0].available, false)
+    assert.match(sources[0].error, /not installed|ENOENT|no state file/)
+  })
+  await withHome(async (home) => {
+    const dir = join(home, 'mcp-skill-manager')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'state.json'), '{ not json')
+    const sources = await mcpManager.readImportCandidates()
+    assert.equal(sources[0].available, false)
+    assert.ok(sources[0].error.length > 0)
+  })
+})
+
+test('an invalid foreign entry is flagged rather than imported', async () => {
+  await withForeignState({
+    mcp: [
+      { serverName: 'bad name', transport: 'stdio', command: 'x', addedByUser: true },
+      { serverName: 'no-command', transport: 'stdio', addedByUser: true },
+    ],
+  }, async () => {
+    const sources = await mcpManager.readImportCandidates()
+    for (const candidate of sources[0].candidates) {
+      assert.equal(candidate.config, undefined)
+      assert.ok(candidate.invalid.length > 0, `${candidate.serverName} must carry a reason`)
+    }
+  })
+})
+
 test('denyNamesForDisabled only names tools that are actually live', () => {
   const schemas = [
     { name: 'mcp__github__create' },
@@ -458,6 +574,88 @@ test('apply() stays synchronous and wires the MCP listeners', async () => {
       assert.ok(fake.listeners.has(name), `listener ${name} registered`)
     }
     assert.ok(fake.effects.some((e) => /MCP/.test(e.label ?? '')), 'MCP effect registered')
+  })
+})
+
+// ── the import surface, and the collision it exists to avoid ────────────
+
+test('a server another plugin mounted cannot be added or removed here', async () => {
+  await withHome(async () => {
+    const { call } = setupWithRoutes({ entries: [entry('msm-mcp-ida-pro-mcp', 'ida-pro-mcp')] })
+    const listed = await call('GET', '/skills-management/api/mcp')
+    assert.equal(listed.payload.servers[0].source, 'foreign')
+    assert.equal(listed.payload.servers[0].removable, false)
+    assert.equal(listed.payload.servers[0].owner, 'dsh-skills-mcp-group-manager')
+
+    // adding a same-named server would make dsh-mcp-client fail on a duplicate
+    // serverName, so it must be refused up front
+    const add = await call('POST', '/skills-management/api/mcp', { serverName: 'ida-pro-mcp', transport: 'streamable-http', url: 'http://127.0.0.1:13337/mcp' })
+    assert.equal(add.status, 409)
+    assert.match(add.payload.error, /already mounted by the plugin/)
+
+    const del = await call('DELETE', '/skills-management/api/mcp', { serverName: 'ida-pro-mcp' })
+    assert.equal(del.status, 409)
+    assert.match(del.payload.error, /mounted by the plugin/)
+  })
+})
+
+test('import takes ownership: refused while the other plugin holds the names, allowed once it lets go', async () => {
+  await withHome(async (home) => {
+    await mkdir(join(home, 'mcp-skill-manager'), { recursive: true })
+    await writeFile(join(home, 'mcp-skill-manager', 'state.json'), JSON.stringify(FOREIGN_STATE))
+    const entries = [entry('msm-mcp-ida-pro-mcp', 'ida-pro-mcp'), entry('msm-mcp-ssh-mcp-server', 'ssh-mcp-server')]
+    const { call, created } = setupWithRoutes({ entries })
+
+    // while the other plugin is live, its names are taken
+    const preview = await call('GET', '/skills-management/api/mcp/import')
+    assert.equal(preview.status, 200)
+    assert.equal(preview.payload.importableCount, 0)
+    assert.deepEqual(preview.payload.sources[0].candidates.map((c) => c.conflict),
+      ['name-taken', 'name-taken'])
+
+    const blocked = await call('POST', '/skills-management/api/mcp/import', {})
+    assert.equal(blocked.status, 201)
+    assert.deepEqual(blocked.payload.imported, [], 'nothing imported while names are taken')
+
+    // the other plugin is disabled → its runtime mounts are gone
+    entries.length = 0
+    const ready = await call('GET', '/skills-management/api/mcp/import')
+    assert.equal(ready.payload.importableCount, 2)
+
+    const done = await call('POST', '/skills-management/api/mcp/import', {})
+    assert.equal(done.status, 201)
+    assert.deepEqual(done.payload.imported, ['ida-pro-mcp', 'ssh-mcp-server'])
+    assert.deepEqual(created.map((c) => c.id), ['sm-mcp-ida-pro-mcp', 'sm-mcp-ssh-mcp-server'])
+    // the response carries the post-import list so the pane can render at once
+    assert.deepEqual(done.payload.servers.map((s) => s.serverName), ['ida-pro-mcp', 'ssh-mcp-server'])
+    assert.ok(done.payload.servers.every((s) => s.source === 'user' && s.removable))
+
+    // and it is persisted, so a restart keeps them
+    const state = JSON.parse(await readFile(join(home, 'skills-management', 'mcp.json'), 'utf8'))
+    assert.deepEqual(state.servers.map((s) => s.serverName), ['ida-pro-mcp', 'ssh-mcp-server'])
+
+    // now that we own them, the other plugin's file no longer offers them
+    const again = await call('GET', '/skills-management/api/mcp/import')
+    assert.equal(again.payload.importableCount, 0, 're-import must not duplicate')
+    assert.deepEqual(again.payload.sources[0].candidates.map((c) => c.conflict),
+      ['already-managed', 'already-managed'])
+
+    // and they are removable by us
+    const del = await call('DELETE', '/skills-management/api/mcp', { serverName: 'ida-pro-mcp' })
+    assert.equal(del.status, 200)
+    assert.deepEqual(del.payload.servers.map((s) => s.serverName), ['ssh-mcp-server'])
+  })
+})
+
+test('import can be told to take only some of the candidates', async () => {
+  await withHome(async (home) => {
+    await mkdir(join(home, 'mcp-skill-manager'), { recursive: true })
+    await writeFile(join(home, 'mcp-skill-manager', 'state.json'), JSON.stringify(FOREIGN_STATE))
+    const { call, created } = setupWithRoutes()
+    const r = await call('POST', '/skills-management/api/mcp/import', { serverNames: ['ssh-mcp-server'] })
+    assert.equal(r.status, 201)
+    assert.deepEqual(r.payload.imported, ['ssh-mcp-server'])
+    assert.deepEqual(created.map((c) => c.id), ['sm-mcp-ssh-mcp-server'])
   })
 })
 

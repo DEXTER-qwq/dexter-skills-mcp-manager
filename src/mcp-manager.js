@@ -288,20 +288,66 @@ function reviveJsValues(map) {
 
 // ── loader / tools helpers (pure; the caller supplies the services) ──────
 
-/** Every configured MCP server the loader knows, in entry order. */
-function configuredServers(loader) {
+/**
+ * Which plugin owns a dynamic loader entry, judged by its id.
+ *
+ * A composed row (bundle / profile patch / agent preset) has a plain
+ * human-chosen id like `mcp-github`. A row a plugin mounted at runtime carries
+ * that plugin's own prefix — `sm-mcp-` for us, `msm-mcp-` for
+ * dsh-skills-mcp-group-manager — and only its owner may create or remove it.
+ * `owner` is `undefined` for composed rows, `'self'` for ours, and `'other'`
+ * (with the raw prefix) for another plugin's.
+ */
+function entryOwner(id) {
+  if (typeof id !== 'string' || id === '') return { owner: undefined }
+  if (id.startsWith(MANAGED_ENTRY_PREFIX)) return { owner: 'self', prefix: MANAGED_ENTRY_PREFIX }
+  const match = /^(.*?-mcp-)/.exec(id)
+  if (match === null) return { owner: undefined }
+  return { owner: 'other', prefix: match[1], plugin: FOREIGN_PREFIX_HINTS[match[1]] }
+}
+
+/** Prefix → plugin, only for the ones we have actually seen in the wild. */
+const FOREIGN_PREFIX_HINTS = { 'msm-mcp-': 'dsh-skills-mcp-group-manager' }
+
+/** Every MCP server the loader knows that this plugin should list. */
+function loaderServers(loader) {
   const out = []
   if (loader === undefined || typeof loader.entries !== 'function') return out
   for (const entry of loader.entries()) {
     const options = entry?.options ?? {}
     if (options.name !== MCP_PLUGIN_NAME) continue
     const id = String(options.id ?? '')
-    if (id.startsWith(MANAGED_ENTRY_PREFIX)) continue // our own dynamic mounts
     const config = options.config
     if (!isPlainObject(config) || typeof config.serverName !== 'string') continue
-    out.push({ id, config, live: entry.fiber !== undefined && entry.disabled !== true })
+    out.push({
+      id,
+      config,
+      ...entryOwner(id),
+      live: entry.fiber !== undefined && entry.disabled !== true,
+    })
   }
   return out
+}
+
+/** Just the composed rows — those this plugin may show and toggle, not mount. */
+function configuredServers(loader) {
+  return loaderServers(loader)
+    .filter((entry) => entry.owner === undefined)
+    .map(({ id, config, live }) => ({ id, config, live }))
+}
+
+/**
+ * The mounted entry for one serverName, whoever owns it. Used to refuse a mount
+ * that would collide: `dsh-mcp-client` rejects a duplicate `serverName` in the
+ * same scope, so two plugins both trying to mount `ida-pro-mcp` would make one
+ * of them fail at startup.
+ */
+function mountedBy(loader, serverName) {
+  for (const entry of loaderServers(loader)) {
+    if (entry.config.serverName !== serverName) continue
+    return { owner: entry.owner, prefix: entry.prefix, plugin: entry.plugin, id: entry.id }
+  }
+  return undefined
 }
 
 /** Live tool names of one server: `mcp__<serverName>__<tool>`. */
@@ -331,9 +377,15 @@ function denyNamesForDisabled(disabledNames, schemas) {
 }
 
 /**
- * One server's state, as the API reports it. `source` tells the UI whether the
- * row can be removed here: `configured` rows come from some composition layer
- * (bundle/patch/preset) and are only toggleable; `user` rows were added here.
+ * One server's state, as the API reports it.
+ *
+ * `source` decides what the row offers:
+ * - `configured` — declared by a composition layer; this plugin only ever
+ *   toggles it (its config belongs to the user's dsh setup).
+ * - `user` — mounted by this plugin; toggle, edit and delete are all ours.
+ * - `foreign` — mounted at runtime by ANOTHER plugin. Removing or replacing it
+ *   is that plugin's business, so the row is read-only here; the UI explains
+ *   where to manage it.
  *
  * The input is a flat record assembled by {@link listServers} — never a live
  * loader object, so nothing un-serializable can escape through the API.
@@ -341,11 +393,13 @@ function denyNamesForDisabled(disabledNames, schemas) {
 function publicServer(record) {
   return {
     serverName: record.serverName,
-    source: record.userAdded ? 'user' : 'configured',
+    source: record.source,
     entryId: record.id,
     transport: record.transport,
     enabled: record.enabled,
     live: record.live === true,
+    removable: record.source === 'user',
+    owner: record.ownerPlugin,
     toolCount: record.toolCount ?? 0,
     command: record.command,
     args: record.args,
@@ -374,15 +428,25 @@ function listServers(loader, state, schemas) {
   const userServers = Array.isArray(state?.servers) ? state.servers : []
   const rows = []
   const seen = new Set()
+  const loaderRows = loaderServers(loader)
+  // liveness of OUR dynamic mounts comes from their loader entry, so a mount
+  // that failed (bad command, port in use) shows as not-live instead of lying
+  const selfMounted = new Map()
+  for (const entry of loaderRows) {
+    if (entry.owner === 'self') selfMounted.set(entry.config.serverName, entry.live)
+  }
 
-  for (const entry of configuredServers(loader)) {
+  for (const entry of loaderRows) {
     const serverName = entry.config.serverName
-    if (seen.has(serverName)) continue
+    if (entry.owner === 'self' || seen.has(serverName)) continue
     seen.add(serverName)
+    // a foreign runtime mount is not ours to remove — another plugin owns it
+    const source = entry.owner === 'other' ? 'foreign' : 'configured'
     rows.push(publicServer({
       id: entry.id,
       serverName,
-      userAdded: false,
+      source,
+      ownerPlugin: entry.plugin,
       transport: entry.config.transport === 'streamable-http' ? 'streamable-http' : 'stdio',
       enabled: !disabled.has(serverName),
       live: entry.live,
@@ -397,28 +461,16 @@ function listServers(loader, state, schemas) {
     }))
   }
 
-  // user servers: liveness comes from their loader entry too, so a mount that
-  // failed (bad command, port in use) shows as not-live instead of pretending
-  const managedIds = new Map()
-  if (loader !== undefined && typeof loader.entries === 'function') {
-    for (const entry of loader.entries()) {
-      const id = String(entry?.options?.id ?? '')
-      if (id.startsWith(MANAGED_ENTRY_PREFIX)) {
-        managedIds.set(entry.options.config?.serverName ?? id, entry.fiber !== undefined && entry.disabled !== true)
-      }
-    }
-  }
-
   for (const server of userServers) {
     if (seen.has(server.serverName)) continue
     seen.add(server.serverName)
     rows.push(publicServer({
       id: MANAGED_ENTRY_PREFIX + server.serverName,
       serverName: server.serverName,
-      userAdded: true,
+      source: 'user',
       transport: server.transport,
       enabled: server.enabled !== false,
-      live: managedIds.get(server.serverName) === true,
+      live: selfMounted.get(server.serverName) === true,
       toolCount: toolsOfServer(schemas, server.serverName).length,
       command: server.command,
       args: server.args,
@@ -434,12 +486,101 @@ function listServers(loader, state, schemas) {
   return rows
 }
 
+/**
+ * Other dsh MCP managers whose state files we know how to read.
+ *
+ * Needed because a runtime mount lives only in the plugin that created it: when
+ * that plugin is disabled its cleanup removes the loader entries, and nothing
+ * in dsh's own configuration brings them back. Importing copies the server
+ * definitions into this plugin's state so this plugin owns the mounts instead.
+ *
+ * Every plugin keeps user-added servers in a different shape, so each entry
+ * pairs a file with a translator to this plugin's `validateServerInput` input.
+ */
+const IMPORT_SOURCES = [
+  {
+    id: 'dsh-skills-mcp-group-manager',
+    label: 'Skills & MCPs Group Manager',
+    file: () => join(dshHome(), 'mcp-skill-manager', 'state.json'),
+    // { groups, mcp: [{ serverName, transport, command|url, args, env, enabled, addedByUser }] }
+    extract: (raw) => (Array.isArray(raw?.mcp) ? raw.mcp : [])
+      .filter((server) => isPlainObject(server) && server.addedByUser === true)
+      .map((server) => ({
+        serverName: server.serverName,
+        transport: server.transport,
+        command: server.command,
+        args: server.args,
+        env: server.env,
+        url: server.url,
+        toolCallTimeoutMs: server.toolCallTimeoutMs,
+        enabled: server.enabled !== false,
+      })),
+  },
+]
+
+/**
+ * Read every known foreign state file and report what could be imported.
+ *
+ * Read-only: nothing is written and nothing is mounted here. `conflict`
+ * distinguishes the two reasons a candidate cannot come over as-is —
+ * `already-managed` (we own a server of that name) versus `name-taken` (one is
+ * already mounted under that name by a composition layer or another plugin,
+ * and dsh-mcp-client rejects a duplicate `serverName`).
+ *
+ * @param options.exclude - serverNames that must be skipped (already ours).
+ * @param options.takenByOthers - serverNames already mounted by someone else.
+ */
+async function readImportCandidates({ exclude = [], takenByOthers = [] } = {}) {
+  const mine = new Set(exclude)
+  const taken = new Set(takenByOthers)
+  const sources = []
+  for (const source of IMPORT_SOURCES) {
+    let file
+    try { file = source.file() } catch { file = '' }
+    const entry = { id: source.id, label: source.label, file, available: false, error: undefined, candidates: [] }
+    let raw
+    try {
+      raw = JSON.parse(await fsP.readFile(file, 'utf8'))
+      entry.available = true
+    } catch (error) {
+      entry.error = error?.code === 'ENOENT' ? 'not installed / no state file' : String(error?.message ?? error)
+      sources.push(entry)
+      continue
+    }
+    let extracted = []
+    try { extracted = source.extract(raw) } catch (error) {
+      entry.error = String(error?.message ?? error)
+      sources.push(entry)
+      continue
+    }
+    for (const candidate of extracted) {
+      const row = { ...candidate }
+      try {
+        const config = validateServerInput(candidate)
+        row.config = config
+        row.serverName = config.serverName
+        row.transport = config.transport
+      } catch (error) {
+        row.invalid = String(error?.message ?? error)
+        entry.candidates.push(row)
+        continue
+      }
+      if (mine.has(row.serverName)) row.conflict = 'already-managed'
+      else if (taken.has(row.serverName)) row.conflict = 'name-taken'
+      entry.candidates.push(row)
+    }
+    sources.push(entry)
+  }
+  return sources
+}
+
 module.exports = {
   MCP_PLUGIN_NAME,
   MANAGED_ENTRY_PREFIX,
   SERVER_NAME_RE,
   JS_ENV_RE,
   STATE_VERSION,
+  IMPORT_SOURCES,
   dshHome,
   stateDir,
   stateFile,
@@ -451,6 +592,10 @@ module.exports = {
   mcpClientConfig,
   reviveJsValues,
   configuredServers,
+  loaderServers,
+  entryOwner,
+  mountedBy,
+  readImportCandidates,
   toolsOfServer,
   denyNamesForDisabled,
   listServers,

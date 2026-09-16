@@ -240,7 +240,21 @@ const ZH = {
   mcpStateFile: '状态文件',
   mcpSourceConfigured: '配置来源',
   mcpSourceUser: '本页新增',
-  mcpSourceHint: '「配置来源」的 server 来自 dsh 组合（bundle / patch / preset），本页只能开关，不能删；「本页新增」的可以改和删。',
+  mcpSourceForeign: '其他插件挂载',
+  mcpSourceHint: '「配置来源」来自 dsh 组合（bundle / patch / preset），本页只开关；「本页新增」的归本页管，可改可删；「其他插件挂载」由别的插件在运行期挂上，本页不动它。',
+  mcpForeignHint: '这条由其他插件动态挂载，本页不动它。那个插件一旦被停用，它会移除自己的条目、server 也随之消失——想改由本页管理：先停用那个插件，再点「从其他插件导入」。',
+  mcpImport: '从其他插件导入',
+  mcpImportTitle: '导入 MCP server',
+  mcpImportHint: '把其他插件状态文件里的 MCP server 定义抄进本插件，改由本插件挂载；之后那些插件停用也不影响它们。若某条显示「同名仍被挂着」，先停用那个插件再回来导入。',
+  mcpImportNone: '没有可导入的 server。',
+  mcpImportReasonNotInstalled: '未安装 / 没有状态文件',
+  mcpImportReasonAlreadyManaged: '本页已在管',
+  mcpImportReasonNameTaken: '同名仍被那个插件挂着 —— 先停用它，再回来导入',
+  mcpImportReasonInvalid: '配置无效',
+  mcpImportDo: '导入选中的 {n} 条',
+  mcpImportDone: '已导入 {n} 条',
+  mcpImportSkipped: '有 {n} 条挂载失败，详见日志',
+  mcpImportSelectAll: '全选可导入的',
   mcpLiveTag: '已连接',
   mcpOfflineTag: '未连接',
   mcpToolsCount: '{n} 个工具',
@@ -387,7 +401,21 @@ const EN = {
   mcpStateFile: 'State file',
   mcpSourceConfigured: 'configured',
   mcpSourceUser: 'added here',
-  mcpSourceHint: 'Rows marked “configured” come from the dsh composition (bundle / patch / preset) and can only be toggled; rows added here can be edited and removed.',
+  mcpSourceForeign: 'mounted by another plugin',
+  mcpSourceHint: '“configured” rows come from the dsh composition (bundle / patch / preset) and are toggle-only; “added here” rows are this plugin’s to edit and remove; “mounted by another plugin” rows are left alone here.',
+  mcpForeignHint: 'Another plugin mounted this row at runtime, so this page leaves it alone. When that plugin is disabled it removes its own entry and the server disappears with it — to take ownership here: disable that plugin first, then use “Import from another plugin”.',
+  mcpImport: 'Import from another plugin',
+  mcpImportTitle: 'Import MCP servers',
+  mcpImportHint: 'Copies MCP server definitions out of another plugin’s state file so this plugin owns the mounts; those servers then survive that plugin being disabled. If a row says a same-named server is still mounted, disable that plugin first and come back.',
+  mcpImportNone: 'Nothing to import.',
+  mcpImportReasonNotInstalled: 'not installed / no state file',
+  mcpImportReasonAlreadyManaged: 'already managed here',
+  mcpImportReasonNameTaken: 'same name still mounted by that plugin — disable it first, then import',
+  mcpImportReasonInvalid: 'invalid config',
+  mcpImportDo: 'Import {n} selected',
+  mcpImportDone: 'Imported {n}',
+  mcpImportSkipped: '{n} failed to mount — see the log',
+  mcpImportSelectAll: 'Select all importable',
   mcpLiveTag: 'connected',
   mcpOfflineTag: 'not connected',
   mcpToolsCount: '{n} tools',
@@ -1485,12 +1513,15 @@ function McpServerCard({ t, row, onEdit, onToggle, onDelete, busy, canEdit }) {
   const headerCount = Object.keys(row.headers || {}).length
   const summary = isStdio ? [row.command, ...(row.args || [])].join(' ') : row.url
   const removable = row.source === 'user'
+  const sourceLabel = row.source === 'user' ? t('mcpSourceUser')
+    : row.source === 'foreign' ? t('mcpSourceForeign') : t('mcpSourceConfigured')
   return h('div', { className: 'sk-card', style: { cursor: 'default' } },
     h('div', { className: 'sk-head' },
       h(Avatar, { name: row.serverName || row.entryId, square: true, size: 40 }),
       h('span', { className: 'sk-title' }, row.serverName || row.entryId),
+      h(Tag, { tone: row.source === 'foreign' ? 'danger' : 'accent' }, sourceLabel),
+      row.owner && h(Tag, null, row.owner),
       h(Tag, { tone: 'accent' }, row.transport),
-      h(Tag, null, removable ? t('mcpSourceUser') : t('mcpSourceConfigured')),
       row.enabled === false && h(Tag, { tone: 'danger' }, t('mcpDisabledTag')),
       row.enabled !== false && h(Tag, { tone: row.live === false ? 'danger' : 'ok' },
         row.live === false ? t('mcpOfflineTag') : t('mcpLiveTag'))),
@@ -1504,7 +1535,9 @@ function McpServerCard({ t, row, onEdit, onToggle, onDelete, busy, canEdit }) {
         isStdio && row.cwd ? row.cwd : null,
         typeof row.toolCallTimeoutMs === 'number' ? `${row.toolCallTimeoutMs} ms` : null,
       ].filter(Boolean).join(' · ')),
-    !removable && h('div', { style: fieldHintStyle() }, t('mcpConfiguredHint')),
+    row.source === 'foreign'
+      ? h('div', { style: fieldHintStyle() }, t('mcpForeignHint'))
+      : row.source === 'configured' && h('div', { style: fieldHintStyle() }, t('mcpConfiguredHint')),
     h('div', { className: 'sk-foot' },
       h('div', { className: 'sk-chips' }, h('span', { className: 'sk-dir' }, row.entryId)),
       h('div', { className: 'sk-rowbtns' },
@@ -1517,6 +1550,58 @@ function McpServerCard({ t, row, onEdit, onToggle, onDelete, busy, canEdit }) {
 }
 
 /**
+ * 导入抽屉：列出其他插件状态文件里的 MCP server 候选，勾选后一次性导入。
+ * 重复、同名被挂、配置无效的候选会标出原因并禁止勾选。
+ */
+function McpImportDialog({ t, data, busy, onClose, onImport }) {
+  const candidates = (data.sources || []).flatMap((source) => source.candidates.map((c) => ({ ...c, sourceId: source.id, sourceLabel: source.label })))
+  const importable = candidates.filter((c) => c.conflict === undefined && c.invalid === undefined)
+  const [picked, setPicked] = useState(() => new Set(importable.map((c) => c.serverName)))
+  const toggle = (name) => setPicked((current) => {
+    const next = new Set(current)
+    if (next.has(name)) next.delete(name); else next.add(name)
+    return next
+  })
+  const reasonFor = (c) => {
+    if (c.invalid !== undefined) return `${t('mcpImportReasonInvalid')}: ${c.invalid}`
+    if (c.conflict === 'already-managed') return t('mcpImportReasonAlreadyManaged')
+    if (c.conflict === 'name-taken') return t('mcpImportReasonNameTaken')
+    return undefined
+  }
+  return h(SkDialog, { title: t('mcpImportTitle'), onClose },
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 420 } },
+      h('div', { className: 'sk-hint' }, t('mcpImportHint')),
+      ...(data.sources || []).map((source) => h('div', { key: source.id, className: 'card', style: { margin: 0 } },
+        h('div', { className: 'sk-head' },
+          h('span', { className: 'sk-title' }, source.label),
+          h(Tag, null, source.id)),
+        h('div', { className: 'sk-dir' }, source.file),
+        source.available === false
+          ? h('div', { className: 'sk-hint' }, `${t('mcpImportReasonNotInstalled')} — ${source.error || ''}`)
+          : source.candidates.length === 0
+            ? h('div', { className: 'sk-hint' }, t('mcpImportNone'))
+            : h('div', { className: 'sk-list', style: { marginTop: 8 } }, source.candidates.map((c) => {
+                const reason = reasonFor(c)
+                return h('label', { key: c.serverName, style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: reason === undefined ? 1 : 0.55 } },
+                  h('input', {
+                    type: 'checkbox', disabled: reason !== undefined, checked: picked.has(c.serverName),
+                    onChange: () => toggle(c.serverName),
+                  }),
+                  h('span', { className: 'sk-title', style: { minWidth: 130 } }, c.serverName),
+                  h(Tag, { tone: 'accent' }, c.transport),
+                  h('span', { className: 'sk-dir', style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                    c.command !== undefined ? [c.command, ...(c.args || [])].join(' ') : c.url),
+                  reason !== undefined && h(Tag, { tone: 'danger' }, reason))
+              })))),
+      h('div', { className: 'sk-dlg-foot' },
+        h(ButtonLite, { onClick: onClose }, t('mcpCancel')),
+        h(ButtonLite, {
+          primary: true, disabled: busy || picked.size === 0,
+          onClick: () => onImport([...picked]),
+        }, t('mcpImportDo', { n: picked.size })))))
+}
+
+/**
  * MCP 管理面板：一个 profile 的 dsh-mcp-client 条目。
  * 只有用户主动操作才发请求（打开页签 / 切换 profile / 增删改），没有轮询。
  */
@@ -1525,6 +1610,7 @@ function McpPane({ t, onToast }) {
   const [busy, setBusy] = useState(false)
   const [dialog, setDialog] = useState(null)      // { row } | { row: null }
   const [pendingDelete, setPendingDelete] = useState(null)
+  const [importData, setImportData] = useState(null)   // 非 null = 导入抽屉打开
 
   const load = () => {
     getJson(API + '/mcp')
@@ -1581,16 +1667,48 @@ function McpPane({ t, onToast }) {
     })
     if (payload !== null) onToast(t('mcpDeleted'))
   }
+  const openImport = async () => {
+    setBusy(true)
+    try {
+      setImportData(await getJson(API + '/mcp/import'))
+    } catch (e) {
+      onToast(t('operationFailed') + ': ' + e.message)
+    } finally { setBusy(false) }
+  }
+  const doImport = async (serverNames) => {
+    setBusy(true)
+    try {
+      const response = await fetch(API + '/mcp/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverNames }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'HTTP ' + response.status)
+      setImportData(payload)
+      if (Array.isArray(payload.servers)) setData(payload)
+      const skipped = payload.skipped || []
+      onToast(skipped.length > 0
+        ? `${t('mcpImportDone', { n: (payload.imported || []).length })} · ${t('mcpImportSkipped', { n: skipped.length })}`
+        : t('mcpImportDone', { n: (payload.imported || []).length }))
+    } catch (e) {
+      onToast(t('operationFailed') + ': ' + e.message)
+    } finally { setBusy(false) }
+  }
+
+  const foreignCount = servers.filter((row) => row.source === 'foreign').length
 
   return [
     h('div', { className: 'sk-toolbar' },
       h('span', { className: 'sk-hint' }, t('mcpHint')),
       h('span', { className: 'spacer' }),
       h(ButtonLite, { onClick: load, disabled: busy }, t('refresh')),
+      h(ButtonLite, { onClick: openImport, disabled: busy || !canMount }, t('mcpImport')),
       h(ButtonLite, { primary: true, disabled: busy || !canMount, onClick: () => setDialog({ row: null }) }, t('mcpAdd'))),
     h('div', { className: 'sk-hint' },
       `${t('mcpStateFile')}: ${data.stateFile || '-'} · ${t('mcpSourceHint')}`),
     h('div', { className: 'sk-hint' }, t('mcpToggleHint')),
+    foreignCount > 0 && h('div', { className: 'sk-hint' }, t('mcpForeignHint')),
     (!canMount || !canToggle) && h('div', { className: 'sk-tag danger', style: { alignSelf: 'flex-start' } }, t('mcpUnavailableTag')),
     (!canMount || !canToggle) && h('div', { className: 'sk-hint' }, t('mcpUnavailableHint')),
     servers.length === 0
@@ -1603,6 +1721,11 @@ function McpPane({ t, onToast }) {
     dialog !== null && h(McpServerDialog, {
       t, row: dialog.row, onClose: () => setDialog(null),
       onSaved: (payload) => { setDialog(null); setData(payload); onToast(t('mcpCreated')) },
+    }),
+    importData !== null && h(McpImportDialog, {
+      t, data: importData, busy,
+      onClose: () => setImportData(null),
+      onImport: doImport,
     }),
     pendingDelete !== null && h(SkDialog, {
       title: t('mcpDeleteTitle'),
