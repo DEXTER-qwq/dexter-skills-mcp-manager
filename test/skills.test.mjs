@@ -68,7 +68,7 @@ async function writeSkill(base, rel, meta) {
 }
 
 test('plugin exports the host-plane contract (local-only surface)', () => {
-  assert.equal(plugin.name, 'dsh-skills-mcp-manager')
+  assert.equal(plugin.name, 'dexter-skills-mcp-manager')
   // 技能面只依赖 skills / webServer / settings。
   // tools / loader 是 MCP 管理需要的：读 loader 里的 dsh-mcp-client 条目、把
   // 手写配置里的 server 挂上去。原版那批 agents/agentDefaultModel/sessions

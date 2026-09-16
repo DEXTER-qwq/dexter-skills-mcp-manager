@@ -2,14 +2,14 @@
  * Regenerate with: npm run build:client
  */
 window.__ModuleLoader__.load({
-  id: "dsh-skills-mcp-manager",
+  id: "dexter-skills-mcp-manager",
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" })
     var React = require("react")
     /**
-     * dsh-skills-mcp-manager - Browser half.
+     * dexter-skills-mcp-manager - Browser half.
      *
      * One React app for every surface (settings section; the former sidebar
      *  full-page entry was retired — pair with dsh-settings-ui for room).
@@ -1409,7 +1409,7 @@ window.__ModuleLoader__.load({
 
     // ── Plugin plane contract ────────────────────────────────────────────────
 
-    const CLIENT_NAME = 'dsh-skills-mcp-manager'
+    const CLIENT_NAME = 'dexter-skills-mcp-manager'
 
     module.exports = {
       name: CLIENT_NAME,

@@ -1,8 +1,10 @@
-# dsh-skills-mcp-manager（技能管理 + MCP 管理 / 本地版）
+# dexter-skills-mcp-manager（技能管理 + MCP 管理 / 本地版）
 
 DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有 coding agent 的技能目录（Claude Code、ZCode、Codex、WorkBuddy 等十余个执行器），可预览、一键收编进 DSH 用户库供 `skill` 工具调用；同级还有「MCP 管理」，用来列出 loader 与手写配置 `mcp.local.jsonc` 里的 MCP server 并说明每条归谁管。
 
 > 从上游 `@weibaohui/skills-management@0.6.1` 改造而来（本包与上游**没有任何发布关系**，`private: true`，只在本机以 `link:` 安装）：已移除「ntd 技能市场（git 仓库同步）」与「分享到 GitCode 官方仓库」两条**联网 / 起子进程**的功能链，并把 MCP 面板改成以手写配置为主。运行期第三方依赖为 0、不发任何网络请求、不 spawn 任何子进程。
+>
+> **包名历史**：`@weibaohui/skills-management`（上游）→ `dsh-skills-mcp-manager`（撞了社区目录里 zebbkira 的同名插件，市场会把他的作者简介和 star 数显示在你的这一行，还会把你的 `link:` 安装当成「他那个插件」的来源）→ **`dexter-skills-mcp-manager`**（当前，社区目录里没有这个名字）。教训：给本地 fork 起名先查社区目录（`awesome-dsh-plugin/awesome-dsh-plugin`），别用已发布插件的名字。
 
 📄 **可交互说明页**：浏览器打开 [`docs/overview.html`](docs/overview.html) —— 改造全过程、功能清单（可筛选）、工作原理、HTTP 接口（可逐条展开）、安全审计结论、验证方式与安装步骤。纯静态、离线、无外链。
 
@@ -173,12 +175,19 @@ dsh plugin --profile desktop add "D:\11dsh\skills-management"
 验证装上了：
 
 ```bash
-dsh plugin why dsh-skills-mcp-manager      # 应显示 link:D:\11dsh\skills-management
+dsh plugin why dexter-skills-mcp-manager      # 应显示 link:D:\11dsh\skills-management
 ```
 
-然后打开 Web UI → **设置** → 左侧「技能管理」。卸载：`dsh plugin remove dsh-skills-mcp-manager`。
+然后打开 Web UI → **设置** → 左侧「技能管理」。卸载：`dsh plugin remove dexter-skills-mcp-manager`。
 
-> **改过包名的话**（本 fork 从 `@weibaohui/skills-management` 改名为 `dsh-skills-mcp-manager`，版本 0.7.0-local → 0.8.0-local）：profile 里记的是**旧包名**，所以要重新注册一次 —— 先 `dsh plugin remove @weibaohui/skills-management`（按 profile 里记的旧名字删），再 `dsh plugin add "D:\11dsh\skills-management"`，然后重启 DSH。顺带看一眼 `~/.dsh/profiles/desktop/cordis.patch.yml`：如果里面有 `id: skills-management` 的残留行（插件市场开关写过的），删掉它。
+> **改过包名就要重新注册**（本 fork 已经改过两次：`@weibaohui/skills-management` → `dsh-skills-mcp-manager` → `dexter-skills-mcp-manager`，版本 0.7.0-local → 0.8.1-local）：profile 里记的是**上一个包名**，所以要先按旧名字删、再按目录装：
+>
+> ```powershell
+> dsh plugin remove <profile 里现在记的那个名字>
+> dsh plugin add "D:\11dsh\skills-management"
+> ```
+>
+> 然后重启 DSH。顺带清理：`~/.dsh/profiles/desktop/node_modules/` 里可能有旧名字的 junction 残留（例如 `@weibaohui/skills-management`、`dsh-skills-mcp-manager`），它们已不在 profile 依赖里，留着有被旧名字解析成第二份插件实例的风险，可以删掉。
 
 设置页侧栏里会出现**两个**同级条目：
 

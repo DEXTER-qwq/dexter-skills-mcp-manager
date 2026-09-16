@@ -1,5 +1,5 @@
 /**
- * dsh-skills-mcp-manager - Browser half.
+ * dexter-skills-mcp-manager - Browser half.
  *
  * One React app for every surface (settings section; the former sidebar
  *  full-page entry was retired — pair with dsh-settings-ui for room).
@@ -1399,7 +1399,7 @@ function McpSectionComponent(props) {
 
 // ── Plugin plane contract ────────────────────────────────────────────────
 
-const CLIENT_NAME = 'dsh-skills-mcp-manager'
+const CLIENT_NAME = 'dexter-skills-mcp-manager'
 
 module.exports = {
   name: CLIENT_NAME,

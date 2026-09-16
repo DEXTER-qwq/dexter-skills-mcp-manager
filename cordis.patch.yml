@@ -1,4 +1,4 @@
-# dsh-skills-mcp-manager bundle patch: contributes the plugin row into the host
+# dexter-skills-mcp-manager bundle patch: contributes the plugin row into the host
 # composition when this package is installed via `dsh plugin add`.
 #
 # The plugin is HOST-PLANE: it registers a skill provider on the host
@@ -7,7 +7,11 @@
 # config — no market, no git, no network), and its client half registers the two
 # management surfaces plus the executor-dir settings page. It must therefore land
 # in the host composition (this insert), never inside an agent preset.
+#
+# The row id stays `skills-mcp-manager` across renames: it is the id the plugin
+# market writes its own enable/disable rows against, and changing it would orphan
+# those rows.
 
 - insert:
     - id: skills-mcp-manager
-      name: 'dsh-skills-mcp-manager'
+      name: 'dexter-skills-mcp-manager'

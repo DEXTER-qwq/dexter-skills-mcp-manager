@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dsh-skills-mcp-manager · 改造与功能说明</title>
+<title>dexter-skills-mcp-manager · 改造与功能说明</title>
 <style>
   :root {
     --bg: #0d1117; --bg2: #161b22; --bg3: #1c2128; --line: #30363d;
@@ -173,7 +173,7 @@
 <body>
 <header class="top">
   <div class="bar">
-    <span class="brand">dsh-skills-mcp-manager <small>0.8.0-local</small></span>
+    <span class="brand">dexter-skills-mcp-manager <small>0.8.1-local</small></span>
     <nav class="tabs" role="tablist" id="tabs">
       <button class="tab" role="tab" data-panel="overview">总览</button>
       <button class="tab" role="tab" data-panel="changes">改了什么</button>
@@ -192,7 +192,7 @@
 <!-- ══════════════ 总览 ══════════════ -->
 <section id="panel-overview">
   <h1>这个插件现在是什么</h1>
-  <p class="lead">从上游 <code>@weibaohui/skills-management@0.6.1</code> 改造而来的<b>本地化 · 硬化版</b>（本包已改名 <code>dsh-skills-mcp-manager</code>，与上游无发布关系）：一个页面管理本机编码助手的技能库，外加一个以手写配置为主的 MCP 管理页面。</p>
+  <p class="lead">从上游 <code>@weibaohui/skills-management@0.6.1</code> 改造而来的<b>本地化 · 硬化版</b>（本包已改名为 <code>dexter-skills-mcp-manager</code>，与上游无发布关系）：一个页面管理本机编码助手的技能库，外加一个以手写配置为主的 MCP 管理页面。</p>
 
   <div class="grid g4" style="margin:18px 0">
     <div class="tile"><div class="k">功能区块</div><div class="v">2</div><div class="s">技能管理 · MCP 管理</div></div>
@@ -434,10 +434,10 @@
   </table>
 
   <h2>验证与卸载</h2>
-  <div class="cmdline"><code id="cmd-why">dsh plugin why dsh-skills-mcp-manager</code><button class="copy" data-copy="cmd-why">复制</button></div>
-  <div class="cmdline"><code id="cmd-rm">dsh plugin remove dsh-skills-mcp-manager</code><button class="copy" data-copy="cmd-rm">复制</button></div>
+  <div class="cmdline"><code id="cmd-why">dsh plugin why dexter-skills-mcp-manager</code><button class="copy" data-copy="cmd-why">复制</button></div>
+  <div class="cmdline"><code id="cmd-rm">dsh plugin remove dexter-skills-mcp-manager</code><button class="copy" data-copy="cmd-rm">复制</button></div>
   <div class="note">
-    <b>改过包名要重新注册一次。</b>本 fork 从 <code>@weibaohui/skills-management</code> 改名为 <code>dsh-skills-mcp-manager</code>（<code>0.7.0-local</code> → <code>0.8.0-local</code>），而 profile 里记的是旧包名：先 <code>dsh plugin remove @weibaohui/skills-management</code>，再 <code>dsh plugin add "D:\11dsh\skills-management"</code>，然后重启 DSH。若 <code>~/.dsh/profiles/desktop/cordis.patch.yml</code> 里还留着 <code>id: skills-management</code> 的残留行，删掉它。
+    <b>改过包名就要重新注册。</b>本 fork 改过两次名：<code>@weibaohui/skills-management</code> → <code>dsh-skills-mcp-manager</code>（<b>撞了社区目录里 zebbkira 的同名插件</b>，市场会把他的作者简介、star 数显示在你的这一行，还会按名字把 <code>link:</code> 安装当成「他那个插件」的来源）→ <code>dexter-skills-mcp-manager</code>（现在，目录里没有这个名字）。做法：先按 profile 里记的旧名字 <code>dsh plugin remove &lt;旧名&gt;</code>，再 <code>dsh plugin add "D:\11dsh\skills-management"</code>，然后重启 DSH。顺手把 <code>node_modules</code> 里旧名字的 junction 残留删掉。
   </div>
   <p class="small muted">卸载插件不会删掉 <code>~/.dsh/skills-management/</code> 目录（<code>mcp.json</code> 记着你的覆盖，<code>mcp.local.jsonc</code> 是你的手写配置）。想彻底清干净，手动删掉那个目录即可。</p>
 
@@ -546,20 +546,21 @@ const COMMITS = [
       <p class="small">保留并强化的：开关只做它能兑现的一件事——把手写配置里 <code>"enabled": false</code> 的条目强制打开（记进 <code>forcedOn</code>，你的文件一个字节都不会动）；写着开的条目页面上不画开关，行内说明让你去改文件。</p>`
   },
   {
-    sha: 'local', kind: 'add', title: '改名 + 描述对齐：@weibaohui/skills-management → dsh-skills-mcp-manager',
+    sha: 'local', kind: 'add', title: '改名两次 + 描述对齐：最终 dexter-skills-mcp-manager',
     stat: '10 文件', date: '第 9 步（当前）',
     body: `
-      <p class="small">插件列表里那行「技能市场…6600+…」描述来自<b>插件市场目录</b>（按包名匹配上游条目），不是本仓库的 package.json —— 只要包名还叫 <code>@weibaohui/skills-management</code>，市场就会一直显示上游那句。所以这次改的是<b>包名</b>：</p>
+      <p class="small">插件列表里那行「技能市场…6600+…」描述来自<b>插件市场目录</b>（按包名匹配条目），不是本仓库的 package.json —— 只要包名还叫 <code>@weibaohui/skills-management</code>，市场就会一直显示上游那句。所以这次改的是<b>包名</b>：</p>
       <table class="small">
         <thead><tr><th>改</th><th>位置</th></tr></thead>
         <tbody>
-          <tr><td>包名 <code>@weibaohui/skills-management</code> → <code>dsh-skills-mcp-manager</code></td><td><code>package.json</code> / <code>package-lock.json</code> / <code>cordis.patch.yml</code> 的 insert 行、宿主 <code>module.exports.name</code>、客户端 <code>CLIENT_NAME</code>（必须等于 boot manifest id，有测试守着）</td></tr>
-          <tr><td>版本 <code>0.7.0-local</code> → <code>0.8.0-local</code></td><td>MCP 面这一轮是不兼容改动，版本对齐</td></tr>
+          <tr><td>包名 <code>@weibaohui/skills-management</code> → <code>dsh-skills-mcp-manager</code> → <code>dexter-skills-mcp-manager</code></td><td><code>package.json</code> / <code>package-lock.json</code> / <code>cordis.patch.yml</code> 的 insert 行、宿主 <code>module.exports.name</code>、客户端 <code>CLIENT_NAME</code>（必须等于 boot manifest id，有测试守着）</td></tr>
+          <tr><td>版本 <code>0.7.0-local</code> → <code>0.8.1-local</code></td><td>MCP 面是不兼容改动；第二次改名修的是撞名</td></tr>
+          <tr><td><b>为什么改名两次</b></td><td><code>dsh-skills-mcp-manager</code> 撞了社区目录里 <a href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin">zebbkira 的已发布同名插件</a>：市场按名字把你本地这一行匹配到他的条目，显示他的作者简介与 star 数；更要紧的是市场对 <code>link:</code> 安装有「还原到目录来源」的匹配路径，本地包<b>没声明仓库</b>时同名即算匹配（它文档里的 #485 就是这个坑），所以必须换一个目录里没有的名字</td></tr>
           <tr><td>描述改成「技能管理 + MCP 管理（本地版）」</td><td>去掉市场 / 6600+ / 治理那套旧话术；关键词加 <code>mcp</code>；删掉指向上游仓库的 <code>repository</code> / <code>homepage</code> / <code>bugs</code>（本包与上游无发布关系，来源写在 README）</td></tr>
-          <tr><td>故意<b>不改</b>：状态目录 <code>~/.dsh/skills-management/</code> 与 HTTP 路由 <code>/skills-management/api</code></td><td>前者里面是你的 <code>mcp.json</code> 与手写配置，改名会甩掉现有数据；后者是纯内部路径，改了只会churn 测试与文档</td></tr>
+          <tr><td>故意<b>不改</b>：状态目录 <code>~/.dsh/skills-management/</code>、HTTP 路由 <code>/skills-management/api</code>、patch 行的 <code>id</code></td><td>状态目录里是你的 <code>mcp.json</code> 与手写配置，改目录会甩掉现有数据；HTTP 路由是纯内部路径；patch 行的 id 是市场写启停行用的，改它会让那些行变孤儿</td></tr>
         </tbody>
       </table>
-      <p class="small">代价：profile 里记的是旧包名，需要重新注册一次 —— <code>dsh plugin remove @weibaohui/skills-management</code> 再 <code>dsh plugin add "D:\\11dsh\\skills-management"</code>，然后重启。</p>`
+      <p class="small">代价：profile 里记的是上一个包名，需要重新注册 —— <code>dsh plugin remove &lt;profile 里现在记的名字&gt;</code> 再 <code>dsh plugin add "D:\\11dsh\\skills-management"</code>，然后重启。</p>`
   }
 ];
 
