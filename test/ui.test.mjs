@@ -119,6 +119,24 @@ test('every locale key is actually consumed by the client source', () => {
   assert.deepEqual(orphans, [], `unused locale keys: ${orphans.join(', ')}`)
 })
 
+test('every t() key the client asks for actually exists in both dictionaries', () => {
+  // The counterpart of the check above: a missing entry does not throw, it
+  // renders the raw key ("browseAll (24)" in a screenshot, which is how this
+  // was found), so the dictionaries are checked in this direction too.
+  const DYNAMIC = new Set(['tabExecutors', 'tabMcp'])
+  const src = readFileSync(new URL('../client/index.js', import.meta.url), 'utf8')
+  const referenced = new Set([...src.matchAll(/\bt\(\s*'([A-Za-z0-9_]+)'/g)].map((m) => m[1]))
+  const missingZh = [...referenced].filter((key) => !DYNAMIC.has(key) && ZH[key] === undefined)
+  const missingEn = [...referenced].filter((key) => !DYNAMIC.has(key) && EN[key] === undefined)
+  assert.deepEqual(missingZh, [], `t() keys with no zh copy: ${missingZh.join(', ')}`)
+  assert.deepEqual(missingEn, [], `t() keys with no en copy: ${missingEn.join(', ')}`)
+  // and the placeholders a key promises must be the ones the caller passes
+  for (const key of ['showMore']) {
+    assert.match(ZH[key], /\{n\}/, `${key} must accept {n}`)
+    assert.match(EN[key], /\{n\}/, `${key} must accept {n}`)
+  }
+})
+
 test('the MCP pane ships its own copy in both locales', () => {
   const mcpKeys = Object.keys(ZH).filter((key) => key.startsWith('mcp'))
   assert.ok(mcpKeys.length >= 25, `expected a full MCP copy set, saw ${mcpKeys.length}`)
