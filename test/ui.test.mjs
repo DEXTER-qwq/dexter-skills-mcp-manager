@@ -97,33 +97,30 @@ test('mcpRowToForm / emptyMcpForm keep the dialog fields consistent', () => {
   const form = mcpRowToForm({
     serverName: 'gh', transport: 'stdio', command: 'npx', args: ['-y', 'pkg'],
     env: { T: { js: 'process.env.T' } }, cwd: 'C:/x', url: '', headers: {},
-    toolCallTimeoutMs: 1234, failOnStartupError: true, reconnect: { enabled: false, maxAttempts: 4 },
+    toolCallTimeoutMs: 1234,
   })
   assert.equal(form.serverName, 'gh')
   assert.equal(form.argsText, '-y\npkg')
   assert.equal(form.envText, 'T=${T}')
   assert.equal(form.timeout, '1234')
-  assert.equal(form.failOnStartup, true)
-  assert.equal(form.reconnectEnabled, false)
-  assert.equal(form.reconnectAttempts, '4')
-  assert.deepEqual(emptyMcpForm(), {
-    serverName: '', transport: 'stdio', command: '', argsText: '', envText: '', cwd: '',
-    url: '', headersText: '', timeout: '', failOnStartup: false, reconnectEnabled: true, reconnectAttempts: '',
-  })
+  assert.deepEqual(Object.keys(emptyMcpForm()).sort(), [
+    'argsText', 'command', 'cwd', 'envText', 'headersText', 'serverName', 'timeout', 'transport', 'url',
+  ])
+  assert.equal(emptyMcpForm().transport, 'stdio')
 })
 
 test('mcpRowToForm tolerates a row with missing or foreign fields', () => {
-  const form = mcpRowToForm({ id: 'x', transport: 'weird', env: null, headers: undefined, args: undefined, reconnect: 'nope' })
+  const form = mcpRowToForm({ serverName: 'x', transport: 'weird', env: null, headers: undefined, args: undefined })
   assert.equal(form.transport, 'stdio')
   assert.equal(form.envText, '')
   assert.equal(form.headersText, '')
   assert.equal(form.argsText, '')
-  assert.equal(form.reconnectEnabled, true)
+  assert.equal(form.timeout, '')
 })
 
 test('the MCP pane ships its own copy in both locales', () => {
   const mcpKeys = Object.keys(ZH).filter((key) => key.startsWith('mcp'))
-  assert.ok(mcpKeys.length >= 40, `expected a full MCP copy set, saw ${mcpKeys.length}`)
+  assert.ok(mcpKeys.length >= 35, `expected a full MCP copy set, saw ${mcpKeys.length}`)
   for (const key of mcpKeys) {
     assert.equal(typeof ZH[key], 'string', `zh.${key}`)
     assert.equal(typeof EN[key], 'string', `en.${key}`)
@@ -131,6 +128,17 @@ test('the MCP pane ships its own copy in both locales', () => {
   }
   assert.equal(ZH.tabMcp, 'MCP 管理')
   assert.equal(ZH.mcpTitle, 'MCP 管理')
+})
+
+test('the MCP copy no longer sends the user to a config file', () => {
+  // The pane stopped editing cordis.patch.yml, so no MCP copy may name that
+  // file or talk about a profile. ("bundle / patch / preset" is fine — those
+  // are composition layers, and the pane legitimately tells the user where a
+  // row came from.)
+  const stale = Object.keys(ZH).filter((key) => key.startsWith('mcp'))
+    .filter((key) => /profile/i.test(key)
+      || /cordis|\.yml|\.yaml/i.test(ZH[key]) || /cordis|\.yml|\.yaml/i.test(EN[key]))
+  assert.deepEqual(stale, [], 'no MCP copy may reference a config file or profile')
 })
 
 test('formatSize humanizes bytes like the list views expect', () => {

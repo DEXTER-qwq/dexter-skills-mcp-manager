@@ -25,10 +25,11 @@ const { randomUUID } = require('node:crypto')
 const fsP = require('node:fs/promises')
 const { basename, join, relative, resolve, sep } = require('node:path')
 const { homedir } = require('node:os')
-// MCP 管理：dsh 里的一条 MCP server = profile 组合里的一条 dsh-mcp-client 记录，
-// 落点就是该 profile 自己的 cordis.patch.yml。读写规则（只重写标记块、其余字节
-// 原样保留、读不回来就拒写）全在那边，见 src/mcp-profile.js 顶部注释。
-const mcpProfile = require('./mcp-profile.js')
+// MCP 管理：不解析、不改写任何 dsh 配置文件。列表来自 loader（所有层都能看到），
+// 用户新增的 server 用 loader.create 动态挂载，开关用 per-agent tools.restrict，
+// 只有本插件自己的状态文件（$DSH_HOME/skills-management/mcp.json）会被写。
+// 见 src/mcp-manager.js 顶部说明。
+const mcpManager = require('./mcp-manager.js')
 // settings 服务要求 schemastery schema（可调用 + toJSON；zod 不兼容，register 会抛错被吞）。
 // 宿主沙箱内解析打包依赖可能抛 ERR_INTERNAL_ASSERTION（.pnpm 软链），因此优先沿
 // dsh 全局安装取 settings 服务自用的那份副本，本地开发/测试再退回标准 require。
@@ -652,55 +653,183 @@ function contentTypeFor(p) {
   return map[ext]
 }
 
-// ── MCP 管理（profile cordis.patch.yml 里的 dsh-mcp-client 条目）──────────
-// 只做 DSH 侧：不改写其他 agent 工具的 MCP 配置；写盘只动本插件自己的标记块。
-
-/** 把 mcp-profile 抛出的错误映射成合适的 HTTP 状态码。 */
+// ── MCP 管理错误 → HTTP 状态码 ──────────────────────────────────────────
 function mcpErrorStatus(error) {
   const message = String((error && error.message) || error)
-  if (/not found/i.test(message)) return 404
-  if (/read-only|cannot be parsed|will not be rewritten|foreign|process\.env\.NAME|left untouched/i.test(message)) return 409
-  if (/invalid profile name|is required|must be|must match|is not a valid URL/i.test(message)) return 400
+  if (/not found|not managed|is not known/i.test(message)) return 404
+  if (/already (exists|managed|configured)|cannot be removed|unavailable/i.test(message)) return 409
+  if (/is required|must be|must match|is not a valid URL|only a process\.env/i.test(message)) return 400
   return 500
-}
-
-/** 读一份 profile 的 MCP 现状，组装成前端需要的响应体。 */
-async function mcpSnapshot(profileName, mcpConfig, resolution) {
-  const read = await mcpProfile.readMcpRows(profileName, mcpConfig)
-  const profiles = await mcpProfile.listProfiles()
-  let warning
-  if (read.parseError !== undefined) {
-    warning = `managed block cannot be parsed: ${read.parseError}`
-  } else if (read.foreignJs) {
-    warning = 'a !!js expression outside process.env.NAME is present; rows are read-only'
-  } else if (!read.fileMissing && !read.markersPresent && !read.canBootstrap) {
-    warning = 'this patch file declares its own entries; the MCP block cannot be added automatically'
-  }
-  return {
-    profile: read.profile,
-    profileSource: resolution === undefined ? undefined : resolution.source,
-    activeProfile: mcpProfile.activeProfileName(mcpConfig),
-    profiles,
-    patchFile: displayPath(read.patchFile),
-    patchReload: read.patchReload,
-    canWrite: read.parseError === undefined && !read.foreignJs && (read.fileMissing || read.markersPresent || read.canBootstrap),
-    warnings: warning === undefined ? [] : [warning],
-    servers: read.rows,
-  }
 }
 
 module.exports = {
   name: 'skills-management',
-  inject: ['skills', 'webServer', 'settings'],
+  inject: ['skills', 'webServer', 'settings', 'agents', 'tools', 'loader'],
   __internals: { extractFrontmatter, parseSkillMd, parseFrontmatterMeta, invocationPolicy, installDirName, EXECUTOR_DEFS, usageStat, usageMemo, setTokenEncoder: (v) => { tokenEncoderOverride = v } },
 
   apply(ctx, config = {}) {
     const installedDir = resolve(expandTilde(config.installedDir !== undefined ? config.installedDir : process.env.DSH_HOME ? join(process.env.DSH_HOME, 'skills') : join(homedir(), '.dsh', 'skills')))
     const providerName = config.providerName !== undefined ? config.providerName : 'ntd-skills'
-    // MCP 管理：目标 profile（默认取活动 profile）与 profile 目录覆盖
-    const mcpConfig = {
-      profile: config.mcpProfile,
-      profileDir: config.mcpProfileDir,
+
+    // ── MCP 管理运行时 ────────────────────────────────────────────────────
+    // apply() 必须保持同步：Cordis 把带 prototype 的函数当构造函数、会忽略返回的
+    // promise，async apply 里 await 之后抛错会变成 unhandled rejection 并可能拖垮
+    // 整个进程。所以这里只做同步注册，异步的挂载/同步都在事件回调或请求里做。
+    const mcpStore = mcpManager.createStore({ logger: ctx.logger })
+    mcpStore.loadSync()
+    /** 服务可能在最小组合里缺席：一律用 ctx.get() 判定，别用属性访问（会抛 Guard 错）。 */
+    const serviceOf = (name) => {
+      try { return typeof ctx.get === 'function' ? ctx.get(name) : ctx[name] } catch { return undefined }
+    }
+    /** agent.id -> { deny, disposer }：当前生效的 MCP 遮蔽层。 */
+    const mcpRestrictions = new Map()
+    /** serverName -> loader entry id：本插件动态挂载的 server。 */
+    const mountedMcp = new Map()
+    const applyingRestrictions = new Set()
+    let mcpWriteChain = Promise.resolve()
+
+    /** 序列化状态改写，避免并发读改写互相覆盖。 */
+    const withMcpLock = (task) => {
+      const run = mcpWriteChain.then(task, task)
+      mcpWriteChain = run.catch(() => {})
+      return run
+    }
+
+    const disabledServerNames = () => (mcpStore.get().disabled ?? []).filter((n) => typeof n === 'string')
+
+    /**
+     * 把「已停用」落到某个 agent 的工具目录上。
+     * 只 deny 当前真实存在的工具名（tools.restrict 对未知名字会抛错），并且
+     * deny 集合没变就绝不重复 restrict —— restrict 会同步触发 tools/change，
+     * 而我们的 tools/change 监听又会回到这里，不比较就会无限递归把进程卡死。
+     */
+    function applyMcpRestrictions(agent) {
+      if (agent === undefined || typeof agent.id !== 'string') return
+      if (applyingRestrictions.has(agent.id)) return
+      applyingRestrictions.add(agent.id)
+      try {
+        const toolsService = serviceOf('tools')
+        if (toolsService === undefined || typeof toolsService.schemas !== 'function') return
+        const deny = mcpManager.denyNamesForDisabled(disabledServerNames(), toolsService.schemas())
+        const current = mcpRestrictions.get(agent.id)
+        if (current !== undefined && current.deny.join('\u0000') === deny.join('\u0000')) return
+        if (current !== undefined) {
+          // 先删表项再 dispose：disposer 会触发 tools/change，重入时必须看不到旧项
+          mcpRestrictions.delete(agent.id)
+          try { current.disposer() } catch { /* 已失效 */ }
+        }
+        if (deny.length === 0) return
+        const agentCtx = agent.ctx
+        if (agentCtx === undefined || typeof agentCtx.get !== 'function') return
+        const scopedTools = agentCtx.get('tools')
+        if (scopedTools === undefined || typeof scopedTools.restrict !== 'function') return
+        const disposer = scopedTools.restrict({ deny })
+        mcpRestrictions.set(agent.id, { deny, disposer })
+      } catch (error) {
+        ctx.logger.warn(`skills-management: MCP restrict failed: ${error && error.message}`)
+      } finally {
+        applyingRestrictions.delete(agent.id)
+      }
+    }
+
+    const applyMcpRestrictionsToAll = () => {
+      const agents = serviceOf('agents')
+      if (agents === undefined || typeof agents.list !== 'function') return
+      for (const agent of agents.list()) applyMcpRestrictions(agent)
+    }
+
+    const isConfiguredServer = (serverName) => mcpManager
+      .configuredServers(serviceOf('loader'))
+      .some((entry) => entry.config.serverName === serverName)
+
+    async function mountMcpServer(server) {
+      if (mountedMcp.has(server.serverName)) return
+      const loader = serviceOf('loader')
+      if (loader === undefined || typeof loader.create !== 'function') {
+        throw new Error('the loader service is unavailable, so a new MCP server cannot be mounted')
+      }
+      if (isConfiguredServer(server.serverName)) {
+        throw new Error(`MCP server '${server.serverName}' is already configured by a composition layer`)
+      }
+      const entryId = mcpManager.MANAGED_ENTRY_PREFIX + server.serverName
+      await loader.create({ id: entryId, name: mcpManager.MCP_PLUGIN_NAME, config: mcpManager.mcpClientConfig(server) })
+      mountedMcp.set(server.serverName, entryId)
+    }
+
+    async function unmountMcpServer(serverName) {
+      const entryId = mountedMcp.get(serverName)
+      if (entryId === undefined) return
+      const loader = serviceOf('loader')
+      if (loader === undefined || typeof loader.remove !== 'function') {
+        mountedMcp.delete(serverName)
+        return
+      }
+      try {
+        // 先等移除真的完成再清表：否则并发的挂载会在旧条目还在时又 create 一次
+        await loader.remove(entryId)
+      } catch (error) {
+        ctx.logger.warn(`skills-management: unmount of '${serverName}' failed: ${error && error.message}`)
+      }
+      mountedMcp.delete(serverName)
+    }
+
+    /** 启动时把用户新增且启用的 server 挂回来（状态跨会话保留）。 */
+    async function syncUserMcpMounts() {
+      const loader = serviceOf('loader')
+      if (loader === undefined) return
+      for (const server of mcpStore.get().servers ?? []) {
+        if (server.enabled === false) continue
+        try { await mountMcpServer(server) } catch (error) {
+          ctx.logger.warn(`skills-management: mount of '${server.serverName}' failed: ${error && error.message}`)
+        }
+      }
+    }
+
+    const mcpSnapshot = () => {
+      const toolsService = serviceOf('tools')
+      const schemas = toolsService !== undefined && typeof toolsService.schemas === 'function' ? toolsService.schemas() : []
+      const loader = serviceOf('loader')
+      const state = mcpStore.get()
+      return {
+        servers: mcpManager.listServers(loader, state, schemas),
+        stateFile: displayPath(mcpManager.stateFile()),
+        loaderAvailable: loader !== undefined && typeof loader.entries === 'function',
+        mountAvailable: loader !== undefined && typeof loader.create === 'function',
+        restrictAvailable: toolsService !== undefined && typeof toolsService.schemas === 'function',
+      }
+    }
+
+    // 启动接线（同步注册，异步动作 fire-and-forget 且自带兜底）
+    ctx.effect(() => {
+      applyMcpRestrictionsToAll()
+      void syncUserMcpMounts().catch((error) => {
+        ctx.logger.warn(`skills-management: initial MCP mount pass failed: ${error && error.message}`)
+      })
+      return () => {
+        for (const { disposer } of mcpRestrictions.values()) {
+          try { disposer() } catch { /* 已失效 */ }
+        }
+        mcpRestrictions.clear()
+        for (const entryId of mountedMcp.values()) {
+          const loader = serviceOf('loader')
+          if (loader !== undefined && typeof loader.remove === 'function') void loader.remove(entryId).catch(() => {})
+        }
+        mountedMcp.clear()
+      }
+    }, 'skills-management: MCP mounts + restrictions')
+
+    if (typeof ctx.on === 'function') {
+      ctx.on('agent/created', ({ agent }) => { applyMcpRestrictions(agent) })
+      ctx.on('agent/disposed', ({ agent }) => {
+        const current = mcpRestrictions.get(agent && agent.id)
+        if (current !== undefined) {
+          mcpRestrictions.delete(agent.id)
+          try { current.disposer() } catch { /* 已失效 */ }
+        }
+      })
+      // 新工具出现（server 重连、动态挂载完成）时补一次 restrict，让刚注册的
+      // 工具也被 deny；compare-before-apply 保证不会因此循环。
+      ctx.on('tools/change', () => { applyMcpRestrictionsToAll() })
     }
 
     // ── Executor (on-machine source) rows ──
@@ -1103,104 +1232,103 @@ module.exports = {
           }
 
           // ── MCP 管理：/skills-management/api/mcp ──────────────────────
-          // profile 解析：显式配置 → Desktop 活动 profile → 「哪个 profile 装了
-          // 本插件」。三者都得不出结论时不下赌注，把候选交给前端让用户选。
+          // 全部基于 loader + 本插件状态文件：不解析、不改写任何 dsh 配置。
           if (apiPath === '/skills-management/api/mcp') {
-            const requested = query.get('profile')
-            const known = (await mcpProfile.listProfiles()).map((p) => p.name)
-            const resolution = requested !== null && requested !== ''
-              ? { name: requested, source: 'requested', names: known,
-                  unknown: known.length > 0 && !known.includes(requested) }
-              : await mcpProfile.resolveProfile(mcpConfig)
-
-            if (resolution.name === undefined) {
-              sendJson(res, 409, {
-                error: 'cannot determine which profile to manage',
-                reason: resolution.source,
-                profiles: resolution.names,
-                hint: 'pass ?profile=<name>, or set mcpProfile in the plugin config',
-              })
-              return
-            }
-
-            // 读：列出目标 profile 里本插件管理的 MCP server（含 Profile 下拉数据）
             if (req.method === 'GET') {
-              const payload = await mcpSnapshot(resolution.name, mcpConfig, resolution)
-              if (resolution.unknown === true) {
-                payload.warnings = [...payload.warnings,
-                  `profile '${resolution.name}' does not exist under $DSH_HOME/profiles`
-                  + (resolution.detected === undefined ? '' : `; '${resolution.detected}' looks like the active one`)]
-              }
-              sendJson(res, 200, payload)
+              sendJson(res, 200, mcpSnapshot())
               return
             }
             if (req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'DELETE') {
               sendJson(res, 405, { error: 'method not allowed' })
               return
             }
-            if (resolution.unknown === true) {
-              sendJson(res, 409, {
-                error: `profile '${resolution.name}' does not exist under $DSH_HOME/profiles`,
-                profiles: resolution.names,
-              })
-              return
-            }
 
-            const profile = resolution.name
-            const state = await mcpProfile.loadState(profile, mcpConfig)
-            const taken = new Set(state.entries.map((e) => e.id))
-
-            if (req.method === 'POST') {
-              const body = await readJsonBody(req)
-              const config2 = mcpProfile.normalizeServerInput(body)
-              if (state.entries.some((e) => e.config.serverName === config2.serverName)) {
-                sendJson(res, 409, { error: `serverName '${config2.serverName}' already exists in this profile` })
-                return
-              }
-              const id = mcpProfile.managedId(config2.serverName, taken)
-              state.entries.push({ id, config: config2 })
-              await mcpProfile.writeState(state, state.entries, state.disabledIds)
-              sendJson(res, 201, { id, ...(await mcpSnapshot(profile, mcpConfig, resolution)) })
-              return
-            }
-
+            // PUT { serverName, enabled } → 开关（配置来源的只改遮蔽层，用户新增的还会挂载/卸载）
             if (req.method === 'PUT') {
               const body = await readJsonBody(req)
-              const id = typeof body.id === 'string' ? body.id : ''
-              if (id === '') { sendJson(res, 400, { error: 'body must provide id' }); return }
-              const row = state.entries.find((e) => e.id === id)
-              if (row === undefined) { sendJson(res, 404, { error: `MCP server '${id}' not found` }); return }
-              if (!id.startsWith(mcpProfile.MANAGED_ID_PREFIX)) {
-                sendJson(res, 409, { error: `MCP server '${id}' is not managed by this plugin and will not be rewritten` })
+              if (typeof body.serverName !== 'string' || body.serverName === '') {
+                sendJson(res, 400, { error: 'body must provide serverName' })
                 return
               }
-              const config2 = mcpProfile.normalizeServerInput(body)
-              const clash = state.entries.find((e) => e.id !== id && e.config.serverName === config2.serverName)
-              if (clash !== undefined) { sendJson(res, 409, { error: `serverName '${config2.serverName}' is already used by '${clash.id}'` }); return }
-              row.config = config2
-              // 启用状态：body.enabled === false 时把该行加进停用清单
-              const disabled = new Set(state.disabledIds)
-              if (body.enabled === false) disabled.add(id)
-              else if (body.enabled === true) disabled.delete(id)
-              await mcpProfile.writeState(state, state.entries, [...disabled])
-              sendJson(res, 200, await mcpSnapshot(profile, mcpConfig, resolution))
+              if (typeof body.enabled !== 'boolean') {
+                sendJson(res, 400, { error: 'body must provide enabled boolean' })
+                return
+              }
+              const serverName = body.serverName
+              const known = mcpSnapshot().servers.some((server) => server.serverName === serverName)
+              if (!known) { sendJson(res, 404, { error: `MCP server '${serverName}' is not known` }); return }
+              const result = await withMcpLock(async () => {
+                const state = mcpStore.get()
+                const disabled = new Set(disabledServerNames())
+                if (body.enabled) disabled.delete(serverName)
+                else disabled.add(serverName)
+                const servers = (state.servers ?? []).map((server) => (
+                  server.serverName === serverName ? { ...server, enabled: body.enabled } : server))
+                await mcpStore.replace({ ...state, disabled: [...disabled], servers })
+                // 用户新增的 server 还要真的挂上/摘下来
+                const userServer = servers.find((server) => server.serverName === serverName)
+                if (userServer !== undefined && state.servers?.some((s) => s.serverName === serverName)) {
+                  if (body.enabled) await mountMcpServer(userServer)
+                  else await unmountMcpServer(serverName)
+                }
+              })
+              void result
+              applyMcpRestrictionsToAll()
+              sendJson(res, 200, mcpSnapshot())
               return
             }
 
-            // DELETE { ids: [...] }（也接受单个 id）
+            // POST { serverName, transport, … } → 动态挂载一个新 server
+            if (req.method === 'POST') {
+              const body = await readJsonBody(req)
+              const input = mcpManager.validateServerInput(body)
+              const created = await withMcpLock(async () => {
+                const state = mcpStore.get()
+                if ((state.servers ?? []).some((server) => server.serverName === input.serverName)) {
+                  const error = new Error(`MCP server '${input.serverName}' is already managed`)
+                  error.status = 409
+                  throw error
+                }
+                if (isConfiguredServer(input.serverName)) {
+                  const error = new Error(`MCP server '${input.serverName}' is already configured by a composition layer`)
+                  error.status = 409
+                  throw error
+                }
+                const server = { ...input, enabled: true }
+                await mcpStore.replace({ ...state, servers: [...(state.servers ?? []), server] })
+                await mountMcpServer(server)
+                return server
+              })
+              applyMcpRestrictionsToAll()
+              sendJson(res, 201, { created: created.serverName, ...mcpSnapshot() })
+              return
+            }
+
+            // DELETE { serverName } → 只允许删本插件新增的
             const body = await readJsonBody(req)
-            const ids = Array.isArray(body.ids) ? body.ids.map(String) : (typeof body.id === 'string' && body.id !== '' ? [body.id] : [])
-            if (ids.length === 0) { sendJson(res, 400, { error: 'body must provide ids[] or id' }); return }
-            const foreign = ids.filter((id) => !id.startsWith(mcpProfile.MANAGED_ID_PREFIX))
-            if (foreign.length > 0) { sendJson(res, 409, { error: `not managed by this plugin: ${foreign.join(', ')}` }); return }
-            const missing = ids.filter((id) => !taken.has(id))
-            if (missing.length > 0) { sendJson(res, 404, { error: `MCP server not found: ${missing.join(', ')}` }); return }
-            const remove = new Set(ids)
-            await mcpProfile.writeState(
-              state,
-              state.entries.filter((e) => !remove.has(e.id)),
-              state.disabledIds.filter((id) => !remove.has(id)))
-            sendJson(res, 200, await mcpSnapshot(profile, mcpConfig, resolution))
+            const serverName = typeof body.serverName === 'string' ? body.serverName
+              : (typeof body.id === 'string' ? body.id : '')
+            if (serverName === '') { sendJson(res, 400, { error: 'body must provide serverName' }); return }
+            await withMcpLock(async () => {
+              const state = mcpStore.get()
+              const owned = (state.servers ?? []).some((server) => server.serverName === serverName)
+              if (!owned) {
+                const error = new Error(
+                  isConfiguredServer(serverName)
+                    ? `MCP server '${serverName}' comes from a composition layer and cannot be removed here; disable it instead`
+                    : `MCP server '${serverName}' is not managed by this plugin`)
+                error.status = isConfiguredServer(serverName) ? 409 : 404
+                throw error
+              }
+              await unmountMcpServer(serverName)
+              await mcpStore.replace({
+                ...state,
+                servers: (state.servers ?? []).filter((server) => server.serverName !== serverName),
+                disabled: disabledServerNames().filter((name) => name !== serverName),
+              })
+            })
+            applyMcpRestrictionsToAll()
+            sendJson(res, 200, mcpSnapshot())
             return
           }
 
@@ -1208,7 +1336,7 @@ module.exports = {
         } catch (error) {
           const message = String(error && error.message || error)
           if (String(req.url || '').includes('/skills-management/api/mcp')) {
-            sendJson(res, mcpErrorStatus(error), { error: message })
+            sendJson(res, error && error.status ? error.status : mcpErrorStatus(error), { error: message })
             return
           }
           sendJson(res, 400, { error: message })

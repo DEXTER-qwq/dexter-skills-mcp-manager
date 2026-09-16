@@ -245,14 +245,17 @@ window.__ModuleLoader__.load({
       mcpEdit: '编辑',
       mcpEditTitle: '编辑 MCP server',
       mcpAddTitle: '新增 MCP server',
-      mcpEmpty: '还没有配置 MCP server，点「新增 MCP server」添加一条。',
-      mcpLoading: '正在读取 profile 的 MCP 配置…',
-      mcpProfile: 'Profile',
-      mcpPatchFile: '配置文件',
-      mcpPatchReload: '改动生效方式',
-      mcpReloadLive: '热生效（无需重启）',
-      mcpReloadStartup: '需重启 dsh',
-      mcpNoProfile: '无法确定活动 profile：请在插件配置里指定 mcpProfile。',
+      mcpEmpty: '还没有 MCP server。这里会列出所有已配置的 server；也可以自己新增一条。',
+      mcpLoading: '正在读取 MCP 状态…',
+      mcpStateFile: '状态文件',
+      mcpSourceConfigured: '配置来源',
+      mcpSourceUser: '本页新增',
+      mcpSourceHint: '「配置来源」的 server 来自 dsh 组合（bundle / patch / preset），本页只能开关，不能删；「本页新增」的可以改和删。',
+      mcpLiveTag: '已连接',
+      mcpOfflineTag: '未连接',
+      mcpToolsCount: '{n} 个工具',
+      mcpToggleHint: '停用会把该 server 的工具从模型工具表里移除（server 本身仍在运行），配置不写回 dsh 的任何文件。',
+      mcpAddHint: '新增的 server 会立即挂载到 dsh（无需重启），状态存在本插件自己的文件里。',
       mcpServerName: '服务名',
       mcpServerNameHint: '成为工具名前缀：mcp__<服务名>__<工具名>；仅字母数字、下划线、连字符，≤32',
       mcpTransport: '传输方式',
@@ -263,36 +266,27 @@ window.__ModuleLoader__.load({
       mcpArgs: '参数',
       mcpArgsHint: '一行一个参数（不解析引号，需要空格的整段写在一行）',
       mcpEnv: '环境变量',
-      mcpEnvHint: '一行一个 KEY=值；需要读取宿主环境变量时写 KEY=${变量名}',
+      mcpEnvHint: '一行一个 KEY=值；需要读取宿主环境变量时写 KEY=${变量名}（只在挂载时读取，不落盘明文）',
       mcpHeaders: '请求头',
       mcpCwd: '工作目录',
       mcpUrl: '地址',
       mcpTimeout: '工具调用超时',
       mcpTimeoutHint: '毫秒，留空用默认 60000',
-      mcpFailOnStartup: '启动失败即中止',
-      mcpFailOnStartupHint: '初始连接或工具同步失败时拒绝激活该条目（默认关闭：只记日志）',
-      mcpReconnect: '重连',
-      mcpReconnectEnabled: '断线自动重连',
-      mcpReconnectAttempts: '最大连续失败次数',
       mcpSave: '保存',
       mcpCancel: '取消',
       mcpDelete: '删除',
       mcpDeleteTitle: '删除 MCP server',
-      mcpDeleteConfirm: '即将删除「{name}」这条 MCP server 记录并写入 profile 配置，删除后该服务的工具不再可用。',
+      mcpDeleteConfirm: '即将删除「{name}」这条 MCP server：它会从 dsh 卸载，工具不再可用。',
       mcpDisable: '停用',
       mcpEnable: '启用',
       mcpDisabledTag: '已停用',
-      mcpReadOnlyTag: '本插件不管辖',
-      mcpReadOnlyHint: '这条记录不是本页面创建的，为避免破坏你的配置，这里只展示、不修改。',
-      mcpForeignJsTag: '含自定义表达式',
-      mcpForeignJsHint: '该条目含 process.env 之外的 !!js 表达式，本页面不重写它。',
-      mcpArgsCount: '{n} 个参数',
-      mcpEnvCount: '{n} 个环境变量',
-      mcpSaved: '已写入 profile 配置',
-      mcpCreated: '已添加 MCP server',
-      mcpDeleted: '已删除',
-      mcpWarnBootstrap: '此 profile 的 patch 文件里已有你自己的条目，本插件不会自动改写它。',
-      mcpWarnParse: '现有管理块无法解析，请手工修好后再用本页面。',
+      mcpConfiguredTag: '不可删除',
+      mcpConfiguredHint: '这条来自 dsh 组合配置，本页不修改它，只能开关。要永久移除请改你自己的 dsh 配置。',
+      mcpSaved: '已更新',
+      mcpCreated: '已添加并挂载 MCP server',
+      mcpDeleted: '已删除并卸载',
+      mcpUnavailableTag: '能力不可用',
+      mcpUnavailableHint: '宿主缺少 loader / tools 服务，MCP 的挂载与开关无法生效；列表仍会显示当前状态。',
       mcpServerNameRequired: '服务名不能为空，且只能用字母数字、下划线、连字符（≤32）',
       mcpCommandRequired: 'stdio 传输必须填命令',
       mcpUrlRequired: 'streamable-http 传输必须填合法地址（http/https）',
@@ -398,14 +392,17 @@ window.__ModuleLoader__.load({
       mcpEdit: 'Edit',
       mcpEditTitle: 'Edit MCP server',
       mcpAddTitle: 'Add MCP server',
-      mcpEmpty: 'No MCP servers configured yet — use “Add MCP server”.',
-      mcpLoading: 'Reading the profile MCP config…',
-      mcpProfile: 'Profile',
-      mcpPatchFile: 'Config file',
-      mcpPatchReload: 'Applies',
-      mcpReloadLive: 'live (no restart needed)',
-      mcpReloadStartup: 'needs a dsh restart',
-      mcpNoProfile: 'Cannot determine the active profile: set mcpProfile in the plugin config.',
+      mcpEmpty: 'No MCP servers yet. Every configured server is listed here; you can also add one.',
+      mcpLoading: 'Reading MCP state…',
+      mcpStateFile: 'State file',
+      mcpSourceConfigured: 'configured',
+      mcpSourceUser: 'added here',
+      mcpSourceHint: 'Rows marked “configured” come from the dsh composition (bundle / patch / preset) and can only be toggled; rows added here can be edited and removed.',
+      mcpLiveTag: 'connected',
+      mcpOfflineTag: 'not connected',
+      mcpToolsCount: '{n} tools',
+      mcpToggleHint: 'Disabling removes that server’s tools from the model tool catalog (the server keeps running). No dsh config file is written.',
+      mcpAddHint: 'A server added here is mounted into dsh immediately (no restart); its state lives in this plugin’s own file.',
       mcpServerName: 'Server name',
       mcpServerNameHint: 'Becomes the tool-name prefix: mcp__<server>__<tool>; letters, digits, underscore and hyphen only, ≤32',
       mcpTransport: 'Transport',
@@ -416,36 +413,27 @@ window.__ModuleLoader__.load({
       mcpArgs: 'Arguments',
       mcpArgsHint: 'One argument per line (quotes are not parsed — put a whole space-bearing argument on one line)',
       mcpEnv: 'Environment',
-      mcpEnvHint: 'One KEY=value per line; use KEY=${VAR} to read a variable from the host environment',
+      mcpEnvHint: 'One KEY=value per line; use KEY=${VAR} to read a host environment variable (resolved at mount time, never stored in clear text)',
       mcpHeaders: 'Headers',
       mcpCwd: 'Working directory',
       mcpUrl: 'URL',
       mcpTimeout: 'Tool call timeout',
       mcpTimeoutHint: 'milliseconds; leave empty for the default 60000',
-      mcpFailOnStartup: 'Abort on startup failure',
-      mcpFailOnStartupHint: 'Refuse to activate this entry when the initial connection or tool sync fails (off by default: log only)',
-      mcpReconnect: 'Reconnect',
-      mcpReconnectEnabled: 'Reconnect automatically',
-      mcpReconnectAttempts: 'Max consecutive failures',
       mcpSave: 'Save',
       mcpCancel: 'Cancel',
       mcpDelete: 'Delete',
       mcpDeleteTitle: 'Delete MCP server',
-      mcpDeleteConfirm: 'Delete the MCP server “{name}” and write the profile config? Its tools stop being available.',
+      mcpDeleteConfirm: 'Delete the MCP server “{name}”? It is unmounted from dsh and its tools stop being available.',
       mcpDisable: 'Disable',
       mcpEnable: 'Enable',
       mcpDisabledTag: 'disabled',
-      mcpReadOnlyTag: 'not managed here',
-      mcpReadOnlyHint: 'This record was not created by this page; it is shown but never rewritten, so your config stays intact.',
-      mcpForeignJsTag: 'custom expression',
-      mcpForeignJsHint: 'This entry uses a !!js expression beyond process.env, so this page will not rewrite it.',
-      mcpArgsCount: '{n} args',
-      mcpEnvCount: '{n} env vars',
-      mcpSaved: 'Written to the profile config',
-      mcpCreated: 'MCP server added',
-      mcpDeleted: 'Deleted',
-      mcpWarnBootstrap: 'This profile patch file already has your own entries; the plugin will not rewrite it automatically.',
-      mcpWarnParse: 'The existing managed block cannot be parsed — fix it by hand before using this page.',
+      mcpConfiguredTag: 'cannot remove',
+      mcpConfiguredHint: 'This row comes from the dsh composition, so this page does not modify it — only toggles it. Remove it in your own dsh config.',
+      mcpSaved: 'Updated',
+      mcpCreated: 'MCP server added and mounted',
+      mcpDeleted: 'Removed and unmounted',
+      mcpUnavailableTag: 'capability unavailable',
+      mcpUnavailableHint: 'The host lacks the loader / tools service, so mounting and toggling cannot take effect; the list still shows current state.',
       mcpServerNameRequired: 'Server name is required and must match [A-Za-z0-9_-]{1,32}',
       mcpCommandRequired: 'A stdio transport needs a command',
       mcpUrlRequired: 'A streamable-http transport needs a valid http(s) URL',
@@ -1337,11 +1325,11 @@ window.__ModuleLoader__.load({
       } catch (e) { alert(t('operationFailed') + ': ' + e.message) }
     }
     
-    // ── MCP 管理（profile cordis.patch.yml 里的 dsh-mcp-client 条目）──────────
+    // ── MCP 管理（loader 里的 dsh-mcp-client 条目 + 本插件状态）────────────────
     
     const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
     const SERVER_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/
-    /** `KEY=${VAR}` 读宿主环境变量；纯 `KEY=值` 按字面量写入配置。 */
+    /** `KEY=${VAR}` 读宿主环境变量；纯 `KEY=值` 按字面量保存。 */
     const ENV_REF_RE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/
     
     /** 配置对象 → 文本域（`!!js process.env.X` 还原成 `${X}`）。 */
@@ -1388,15 +1376,12 @@ window.__ModuleLoader__.load({
         url: row.url || '',
         headersText: mapToText(row.headers),
         timeout: typeof row.toolCallTimeoutMs === 'number' ? String(row.toolCallTimeoutMs) : '',
-        failOnStartup: row.failOnStartupError === true,
-        reconnectEnabled: !(row.reconnect && row.reconnect.enabled === false),
-        reconnectAttempts: row.reconnect && typeof row.reconnect.maxAttempts === 'number' ? String(row.reconnect.maxAttempts) : '',
       }
     }
     
     const emptyMcpForm = () => ({
       serverName: '', transport: 'stdio', command: '', argsText: '', envText: '', cwd: '',
-      url: '', headersText: '', timeout: '', failOnStartup: false, reconnectEnabled: true, reconnectAttempts: '',
+      url: '', headersText: '', timeout: '',
     })
     
     const labelStyle = () => ({ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5 })
@@ -1448,12 +1433,10 @@ window.__ModuleLoader__.load({
     
         setBusy(true)
         try {
-          // `enabled` rides along on edit so a disabled row stays disabled
-          const payload = editing ? { ...body, id: row.id, enabled: row.enabled !== false } : body
           const response = await fetch(endpoint, {
             method: editing ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(body),
           })
           const data = await response.json().catch(() => ({}))
           if (!response.ok) throw new Error(data.error || 'HTTP ' + response.status)
@@ -1475,13 +1458,15 @@ window.__ModuleLoader__.load({
     
       return h(SkDialog, { title: editing ? t('mcpEditTitle') : t('mcpAddTitle'), onClose, wide: true },
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-          h('div', { className: 'sk-hint' }, t('mcpHint')),
+          h('div', { className: 'sk-hint' }, t('mcpAddHint')),
+          // 编辑只允许改配置内容；服务名是 loader 条目 id 与工具名前缀，改名等于换一个 server
           text(t('mcpServerName'), form.serverName, (v) => patch({ serverName: v }), t('mcpServerNameHint'), 'github'),
-          h('label', { style: labelStyle() },
+          !editing && h('label', { style: labelStyle() },
             h('span', { className: 'sk-dir' }, t('mcpTransport')),
             h('select', { className: 'sk-input', style: { width: '100%' }, value: form.transport, onChange: (e) => patch({ transport: e.target.value }) },
               h('option', { value: 'stdio' }, t('mcpStdio')),
               h('option', { value: 'streamable-http' }, t('mcpHttp')))),
+          editing && h('div', { style: fieldHintStyle() }, `${t('mcpTransport')}: ${form.transport}`),
           isStdio
             ? [
                 text(t('mcpCommand'), form.command, (v) => patch({ command: v }), t('mcpCommandHint'), 'npx'),
@@ -1493,64 +1478,51 @@ window.__ModuleLoader__.load({
                 text(t('mcpUrl'), form.url, (v) => patch({ url: v }), undefined, 'http://localhost:3000/mcp'),
                 area(t('mcpHeaders'), form.headersText, (v) => patch({ headersText: v }), t('mcpEnvHint')),
               ],
-          h('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
-            h('div', { style: { ...labelStyle(), flex: '0 0 200px' } },
-              h('span', { className: 'sk-dir' }, t('mcpTimeout')),
-              h('input', { className: 'sk-input', value: form.timeout, placeholder: '60000', onChange: (e) => patch({ timeout: e.target.value }) }),
-              h('span', { style: fieldHintStyle() }, t('mcpTimeoutHint'))),
-            h('div', { style: { ...labelStyle(), flex: '0 0 200px' } },
-              h('span', { className: 'sk-dir' }, t('mcpReconnect')),
-              h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12.5 } },
-                h('input', { type: 'checkbox', checked: form.reconnectEnabled, onChange: (e) => patch({ reconnectEnabled: e.target.checked }) }),
-                t('mcpReconnectEnabled')),
-              h('input', { className: 'sk-input', value: form.reconnectAttempts, placeholder: '10', onChange: (e) => patch({ reconnectAttempts: e.target.value }) }))),
-          h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5 } },
-            h('input', { type: 'checkbox', checked: form.failOnStartup, onChange: (e) => patch({ failOnStartup: e.target.checked }) }),
-            h('span', null, t('mcpFailOnStartup'))),
-          h('span', { style: fieldHintStyle() }, t('mcpFailOnStartupHint')),
+          h('div', { style: { ...labelStyle(), flex: '0 0 200px' } },
+            h('span', { className: 'sk-dir' }, t('mcpTimeout')),
+            h('input', { className: 'sk-input', value: form.timeout, placeholder: '60000', onChange: (e) => patch({ timeout: e.target.value }) }),
+            h('span', { style: fieldHintStyle() }, t('mcpTimeoutHint'))),
           error !== null && h('div', { className: 'sk-tag danger', style: { alignSelf: 'flex-start', whiteSpace: 'pre-wrap' } }, error),
           h('div', { className: 'sk-dlg-foot' },
             h(ButtonLite, { onClick: onClose }, t('mcpCancel')),
             h(ButtonLite, { primary: true, disabled: busy, onClick: submit }, t('mcpSave')))))
     }
     
-    /** MCP server 一行：服务名 + 传输摘要 + 操作按钮。 */
-    function McpServerCard({ t, row, onEdit, onToggle, onDelete, busy }) {
+    /** MCP server 一行：服务名 + 传输摘要 + 开关/编辑/删除。 */
+    function McpServerCard({ t, row, onEdit, onToggle, onDelete, busy, canEdit }) {
       const isStdio = row.transport === 'stdio'
       const envCount = Object.keys(row.env || {}).length
       const headerCount = Object.keys(row.headers || {}).length
-      const summary = isStdio
-        ? [row.command, ...(row.args || [])].join(' ')
-        : row.url
+      const summary = isStdio ? [row.command, ...(row.args || [])].join(' ') : row.url
+      const removable = row.source === 'user'
       return h('div', { className: 'sk-card', style: { cursor: 'default' } },
         h('div', { className: 'sk-head' },
-          h(Avatar, { name: row.serverName || row.id, square: true, size: 40 }),
-          h('span', { className: 'sk-title' }, row.serverName || row.id),
+          h(Avatar, { name: row.serverName || row.entryId, square: true, size: 40 }),
+          h('span', { className: 'sk-title' }, row.serverName || row.entryId),
           h(Tag, { tone: 'accent' }, row.transport),
+          h(Tag, null, removable ? t('mcpSourceUser') : t('mcpSourceConfigured')),
           row.enabled === false && h(Tag, { tone: 'danger' }, t('mcpDisabledTag')),
-          row.editable === false && h(Tag, null, t('mcpReadOnlyTag')),
-          row.hasForeignJs === true && h(Tag, { tone: 'danger' }, t('mcpForeignJsTag'))),
+          row.enabled !== false && h(Tag, { tone: row.live === false ? 'danger' : 'ok' },
+            row.live === false ? t('mcpOfflineTag') : t('mcpLiveTag'))),
         h('div', { className: 'sk-desc', style: { wordBreak: 'break-all' } }, summary),
         h('div', { className: 'sk-stats' },
           [
-            isStdio && (row.args || []).length > 0 ? t('mcpArgsCount', { n: row.args.length }) : null,
-            isStdio && envCount > 0 ? t('mcpEnvCount', { n: envCount }) : null,
-            !isStdio && headerCount > 0 ? t('mcpEnvCount', { n: headerCount }) : null,
+            t('mcpToolsCount', { n: row.toolCount ?? 0 }),
+            isStdio && (row.args || []).length > 0 ? `${row.args.length} args` : null,
+            isStdio && envCount > 0 ? `${envCount} env` : null,
+            !isStdio && headerCount > 0 ? `${headerCount} headers` : null,
             isStdio && row.cwd ? row.cwd : null,
             typeof row.toolCallTimeoutMs === 'number' ? `${row.toolCallTimeoutMs} ms` : null,
-            row.failOnStartupError === true ? t('mcpFailOnStartup') : null,
-            row.reconnect && row.reconnect.enabled === false ? t('mcpReconnectEnabled') + ': off' : null,
           ].filter(Boolean).join(' · ')),
-        row.editable === false && h('div', { style: fieldHintStyle() }, row.hasForeignJs ? t('mcpForeignJsHint') : t('mcpReadOnlyHint')),
+        !removable && h('div', { style: fieldHintStyle() }, t('mcpConfiguredHint')),
         h('div', { className: 'sk-foot' },
-          h('div', { className: 'sk-chips' },
-            h('span', { className: 'sk-dir' }, row.id)),
+          h('div', { className: 'sk-chips' }, h('span', { className: 'sk-dir' }, row.entryId)),
           h('div', { className: 'sk-rowbtns' },
-            row.editable !== false && h(ButtonLite, { small: true, disabled: busy,
+            h(ButtonLite, { small: true, disabled: busy,
               onClick: () => onToggle(row) }, row.enabled === false ? t('mcpEnable') : t('mcpDisable')),
-            row.editable !== false && h(ButtonLite, { small: true, disabled: busy,
+            canEdit && removable && h(ButtonLite, { small: true, disabled: busy,
               onClick: () => onEdit(row) }, t('mcpEdit')),
-            row.editable !== false && h(ButtonLite, { danger: true, small: true, disabled: busy,
+            removable && h(ButtonLite, { danger: true, small: true, disabled: busy,
               onClick: () => onDelete(row) }, t('mcpDelete')))))
     }
     
@@ -1560,30 +1532,27 @@ window.__ModuleLoader__.load({
      */
     function McpPane({ t, onToast }) {
       const [data, setData] = useState(null)
-      const [profile, setProfile] = useState(null)
       const [busy, setBusy] = useState(false)
       const [dialog, setDialog] = useState(null)      // { row } | { row: null }
       const [pendingDelete, setPendingDelete] = useState(null)
     
-      const load = (name) => {
-        const query = name ? `?profile=${encodeURIComponent(name)}` : ''
-        setData(null)
-        getJson(API + '/mcp' + query)
-          .then((payload) => { setData(payload); setProfile(payload.profile) })
+      const load = () => {
+        getJson(API + '/mcp')
+          .then(setData)
           .catch((e) => {
-            // 拿不到 profile（或请求失败）时也要把状态收尾，否则页面永远停在 loading
-            setData({ servers: [], profiles: [], canWrite: false, error: String(e && e.message || e) })
+            // 请求失败也要收尾，否则页面永远停在 loading
+            setData({ servers: [], loaderAvailable: false, mountAvailable: false, error: String(e && e.message || e) })
           })
       }
-      useEffect(() => { load(null) }, [])
+      useEffect(load, [])
     
       const act = async (request) => {
         setBusy(true)
         try {
-          const response = await fetch(`${API}/mcp?profile=${encodeURIComponent(profile)}`, request)
+          const response = await fetch(API + '/mcp', request)
           const payload = await response.json().catch(() => ({}))
           if (!response.ok) throw new Error(payload.error || 'HTTP ' + response.status)
-          if (Array.isArray(payload.servers)) { setData(payload); setProfile(payload.profile) }
+          if (Array.isArray(payload.servers)) setData(payload)
           return payload
         } catch (e) {
           onToast(t('operationFailed') + ': ' + e.message)
@@ -1593,38 +1562,22 @@ window.__ModuleLoader__.load({
     
       if (data === null) return h(Spinner, { label: t('mcpLoading') })
     
-      // 读取失败（例如无法判定 profile）：给确定性说明，不留白屏/无限转圈
+      // 读取失败：给确定性说明，不留白屏/无限转圈
       if (data.error !== undefined) {
         return [
           h(Empty, null, `${t('operationFailed')}: ${data.error}`),
-          h('div', { className: 'sk-hint' }, t('mcpNoProfile')),
-          (data.profiles || []).length > 0 && h('div', { className: 'sk-toolbar' },
-            h('span', { className: 'sk-dir' }, t('mcpProfile')),
-            (data.profiles || []).map((p) => h(ButtonLite, {
-              key: p.name || p, onClick: () => load(p.name || p),
-            }, p.name || p))),
-          h('div', { className: 'sk-toolbar' }, h(ButtonLite, { onClick: () => load(null) }, t('refresh'))),
+          h('div', { className: 'sk-toolbar' }, h(ButtonLite, { onClick: load }, t('refresh'))),
         ]
       }
     
       const servers = data.servers || []
-      const writable = data.canWrite !== false
-      const selectProfile = (name) => {
-        if (name === profile) return
-        setData(null)
-        load(name)
-      }
+      const canMount = data.mountAvailable !== false
+      const canToggle = data.restrictAvailable !== false
       const doToggle = async (row) => {
         const payload = await act({
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: row.id, serverName: row.serverName, transport: row.transport,
-            command: row.command, args: row.args, env: row.env, cwd: row.cwd,
-            url: row.url, headers: row.headers,
-            toolCallTimeoutMs: row.toolCallTimeoutMs, failOnStartupError: row.failOnStartupError,
-            reconnect: row.reconnect, enabled: row.enabled === false,
-          }),
+          body: JSON.stringify({ serverName: row.serverName, enabled: row.enabled === false }),
         })
         if (payload !== null) onToast(t('mcpSaved'))
       }
@@ -1634,7 +1587,7 @@ window.__ModuleLoader__.load({
         const payload = await act({
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: [row.id] }),
+          body: JSON.stringify({ serverName: row.serverName }),
         })
         if (payload !== null) onToast(t('mcpDeleted'))
       }
@@ -1643,29 +1596,23 @@ window.__ModuleLoader__.load({
         h('div', { className: 'sk-toolbar' },
           h('span', { className: 'sk-hint' }, t('mcpHint')),
           h('span', { className: 'spacer' }),
-          h('span', { className: 'sk-dir' }, t('mcpProfile')),
-          (data.profiles || []).length > 0
-            ? h('select', { className: 'sk-input', value: profile || '', onChange: (e) => selectProfile(e.target.value), style: selectStyle() },
-                (data.profiles || []).map((p) => h('option', { key: p.name, value: p.name },
-                  p.name + (p.name === data.activeProfile ? ' *' : ''))))
-            : h('span', { className: 'sk-hint' }, profile || '-'),
-          h(ButtonLite, { onClick: () => load(profile), disabled: busy }, t('refresh')),
-          h(ButtonLite, { primary: true, disabled: busy || !writable, onClick: () => setDialog({ row: null }) }, t('mcpAdd'))),
+          h(ButtonLite, { onClick: load, disabled: busy }, t('refresh')),
+          h(ButtonLite, { primary: true, disabled: busy || !canMount, onClick: () => setDialog({ row: null }) }, t('mcpAdd'))),
         h('div', { className: 'sk-hint' },
-          `${t('mcpPatchFile')}: ${data.patchFile} · ${t('mcpPatchReload')}: ${data.patchReload === 'startup' ? t('mcpReloadStartup') : t('mcpReloadLive')}`),
-        ...(data.warnings || []).map((warning) => h('div', { key: warning, className: 'sk-tag danger', style: { alignSelf: 'flex-start' } }, warning)),
+          `${t('mcpStateFile')}: ${data.stateFile || '-'} · ${t('mcpSourceHint')}`),
+        h('div', { className: 'sk-hint' }, t('mcpToggleHint')),
+        (!canMount || !canToggle) && h('div', { className: 'sk-tag danger', style: { alignSelf: 'flex-start' } }, t('mcpUnavailableTag')),
+        (!canMount || !canToggle) && h('div', { className: 'sk-hint' }, t('mcpUnavailableHint')),
         servers.length === 0
           ? h(Empty, null, t('mcpEmpty'))
           : h('div', { className: 'sk-src' }, servers.map((row) =>
-              h(McpServerCard, { key: row.id, t, row, busy, onEdit: (r) => setDialog({ row: r }), onToggle: doToggle, onDelete: setPendingDelete }))),
+              h(McpServerCard, {
+                key: row.serverName, t, row, busy, canEdit: false,
+                onEdit: (r) => setDialog({ row: r }), onToggle: doToggle, onDelete: setPendingDelete,
+              }))),
         dialog !== null && h(McpServerDialog, {
-          t, profile, row: dialog.row, onClose: () => setDialog(null),
-          onSaved: (payload) => {
-            setDialog(null)
-            setData(payload)
-            setProfile(payload.profile)
-            onToast(t('mcpCreated'))
-          },
+          t, row: dialog.row, onClose: () => setDialog(null),
+          onSaved: (payload) => { setDialog(null); setData(payload); onToast(t('mcpCreated')) },
         }),
         pendingDelete !== null && h(SkDialog, {
           title: t('mcpDeleteTitle'),
@@ -1674,7 +1621,7 @@ window.__ModuleLoader__.load({
             h(ButtonLite, { onClick: () => setPendingDelete(null) }, t('mcpCancel')),
             h(ButtonLite, { primary: true, danger: true, onClick: doDelete }, t('mcpDelete')),
           ],
-        }, h('div', { className: 'sk-hint' }, t('mcpDeleteConfirm', { name: pendingDelete.serverName || pendingDelete.id }))),
+        }, h('div', { className: 'sk-hint' }, t('mcpDeleteConfirm', { name: pendingDelete.serverName || pendingDelete.entryId }))),
       ]
     }
     

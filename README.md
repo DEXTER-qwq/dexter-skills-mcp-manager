@@ -18,26 +18,32 @@ DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有
 
 ### MCP 管理
 
-设置页里**与「技能管理」同级**的区块（侧栏独立入口，不是技能页里的页签），管理**当前 profile** 的 MCP server 条目。
+设置页里**与「技能管理」同级**的区块（侧栏独立入口），管理 dsh 的 MCP server。
 
-背景：dsh 里一条 MCP server 就是 profile 组合里的一条 `@deepseek-ai/dsh-mcp-client` 记录，它的工具会以 `mcp__<服务名>__<工具名>` 出现在模型工具表里；用户自己的落点就是该 profile 的 `~/.dsh/profiles/<profile>/cordis.patch.yml`。
+背景：dsh 里一条 MCP server 就是组合里的一条 `@deepseek-ai/dsh-mcp-client` 记录，它的工具以 `mcp__<服务名>__<工具名>` 出现在模型工具表里。
 
-- **列表**：服务名、传输方式、命令行/地址、参数与环境变量数量、超时、是否停用；profile 下拉可切换；显示配置文件路径与「改动生效方式」（desktop 是 `patchReload: live`，写完热生效，不用重启）
-- **新增 / 编辑**：`serverName`、`stdio`（command / args / env / cwd）或 `streamable-http`（url / headers）、`toolCallTimeoutMs`、`failOnStartupError`、`reconnect.enabled` / `reconnect.maxAttempts`
-- **停用 / 启用**：写入一条 `{ id, disable: true }` patch，不删除记录
-- **删除**：连同它的停用行一起移除
-- **环境变量与请求头**：一行一个 `KEY=值`；写 `KEY=${VAR}` 会落成 `!!js process.env.VAR`（读宿主环境变量，不落盘明文）
+- **列表**：服务名、传输方式、命令行/地址、工具数量、是否连接、是否停用、来源（`配置来源` / `本页新增`）
+- **开关**：停用会把该 server 的工具从**模型工具目录**里移除（server 本身照旧运行），配置不写回 dsh 的任何文件
+- **新增**：`serverName` + `stdio`（command / args / env / cwd）或 `streamable-http`（url / headers），可设 `toolCallTimeoutMs`；新增后**立即挂载到 dsh，无需重启**
+- **删除**：只对「本页新增」的 server 开放；来自 dsh 组合的条目只能开关
+- **环境变量与请求头**：一行一个 `KEY=值`；写 `KEY=${VAR}` 表示**挂载时读宿主环境变量**，不落盘明文
 
-#### profile 是怎么确定的
+#### 它怎么工作（与前几版的根本区别）
 
-dsh **不会**告诉插件「哪个 profile 加载了你」——Desktop 的 `DSH_DESKTOP_DEFAULT_PROFILE` 只导出给它的终端，宿主进程里没有。所以按以下顺序解析：
+早先的实现去解析并改写 profile 的 `cordis.patch.yml`，于是需要猜活动 profile、手写 YAML 进 dsh 拥有的文件、而且只能看到那一个文件里的 server。现在**完全不碰任何 dsh 配置文件**：
 
-1. `config.mcpProfile`（cordis 配置）或 `config.mcpProfileDir`（直接钉住目录，profile 名取目录名）
-2. `$SKILLS_MCP_PROFILE`
-3. Desktop 自己的活动 profile 状态：`%APPDATA%\DSH Desktop\profile-selection\state.json` 的 `active`
-4. **推断**：哪个 profile 的 `package.json` 里把本插件列为依赖（插件只会在装了它的 profile 里运行）。只有一个 → 用它；有多个 → 用第 3 步挑；仍不能确定 → 返回 409 并列出候选，让 UI 提示你选，**不猜**
+| 能力 | 实现 |
+| --- | --- |
+| 列表 | 读 `ctx.loader.entries()` —— 这是运行期的真源，所以 **bundle / patch / preset / 任何层**声明的 MCP server 都看得见 |
+| 停用/启用 | 对每个 agent 下一层 `tools.restrict({ deny })`，把该 server 的工具从该 agent 的目录里摘掉（只 deny 当前真实注册的工具名；deny 集合没变就绝不重复 restrict，否则 `tools/change` 会递归把进程卡死） |
+| 新增/删除 | `ctx.loader.create()` / `ctx.loader.remove()` 挂载真实的 `dsh-mcp-client` loader 条目（id 前缀 `sm-mcp-`），与环境里其他 MCP server 走同一条路径 |
+| 持久化 | 只有本插件自己的文件：`$DSH_HOME/skills-management/mcp.json`（原子写、串行化、损坏即当空），记录「哪些 server 被停用」与「本页新增了哪些 server」 |
 
-UI 上仍可用 Profile 下拉切换（等价于 `?profile=<name>`）。
+因此：**没有 profile 猜测、没有 YAML 生成、没有对 dsh 配置文件的写操作**。`stateFile` 一栏会在界面上告诉你那个文件在哪；删掉它等于把所有开关和自建 server 恢复默认。
+
+停用状态按 `serverName` 记住，所以对「配置来源」的 server 也有效——这正是它不需要改配置文件的原因。`apply()` 保持**同步**（Cordis 把带 prototype 的函数当构造函数、会忽略返回的 promise，async apply 里 await 之后抛错会变成 unhandled rejection 并可能拖垮进程），异步的挂载都在事件回调或请求里做。
+
+> 要是宿主缺少 `loader` / `tools` 服务（最小组合），页面会显示「能力不可用」而不是报错，并照常列出当前状态。
 
 ## 改造说明（相对上游 0.6.1 删掉了什么）
 
@@ -50,16 +56,9 @@ UI 上仍可用 Profile 下拉切换（等价于 `?profile=<name>`）。
 | `.github/workflows/publish.yml` | npm Trusted Publishing CI | 本地私有分支，不再发布到 npm |
 | `docs/demo*.gif`、`client/hooks/*.ts`、`client/components/*.ts` | 旧市场 UI 截图；上一版 koa 架构遗留的 TS hook，运行时从未被加载 | 与现界面不符 / 死代码 |
 
-## MCP 管理的写入规则（重要）
+## MCP 管理不写 dsh 配置
 
-这一页会改你自己的 `cordis.patch.yml`，所以规则是刻意的：
-
-1. **只重写本插件自己的标记块**。所有写入都落在这两行注释之间，文件其余部分（你的注释、顺序、自己的 patch 条目）**逐字节保留**——标记之外的内容从不重新生成。
-2. **读不回来就不写**。块内出现解析器无法完整说明的行、或 `process.env.NAME` 形式之外的 `!!js` 表达式时，整块变为只读并返回 409，而不是"尽力而为"地重写。
-3. **非本插件创建的条目只读**。列表里会显示 `本插件不管辖`，编辑/删除会返回 409。
-4. **不碰有自己条目的文件**。若 `cordis.patch.yml` 已有你自己的 patch 条目且没有本插件的标记块，会拒绝自动写入（`canWrite: false`）并保留原文件；此时手写该块、或换一个 profile。
-5. **`!!js` 只接受 `process.env.NAME`**。因为从 Web UI 写这个标签等价于在宿主进程里执行任意代码，只放行文档里那种读取环境变量的形态；其他表达式你手写能用，本页只展示不重写。
-6. **值不会被 YAML 类型误判**：生成的 YAML 里所有字符串都加引号，所以在 `args` 里写 `true` / `123` / `null` / `#x` 都能原样还原。
+详见上文「它怎么工作」。一句话：只读 `ctx.loader.entries()`，只写 `$DSH_HOME/skills-management/mcp.json`。唯一的输入约束是：`env` / `headers` 里的 `!!js` 只接受 `process.env.NAME` 形态（从 Web UI 写这个标签等价于在宿主进程里执行任意代码），并且在**挂载时**解析成实际值，不会把 `process.env.X` 当字符串塞给 server。
 
 ## API 面（本地唯一）
 
@@ -73,13 +72,13 @@ GET    /skills-management/api/file?name=&path=&executor=
 POST   /skills-management/api/install               # {name, from:<executor>, overwrite?}
 DELETE /skills-management/api                       # {name, executor?}
 PUT    /skills-management/api/invocation            # {name, modelInvocable}
-GET    /skills-management/api/mcp[?profile=<name>]  # MCP server 列表 + profile 列表
-POST   /skills-management/api/mcp[?profile=<name>]  # {serverName, transport, …}
-PUT    /skills-management/api/mcp[?profile=<name>]  # {id, …}（含 enabled:false 停用）
-DELETE /skills-management/api/mcp[?profile=<name>]  # {ids:[…]} 或 {id}
+GET    /skills-management/api/mcp                   # MCP server 列表（loader + 状态）
+POST   /skills-management/api/mcp                   # {serverName, transport, …}  新增并挂载
+PUT    /skills-management/api/mcp                   # {serverName, enabled}       开关
+DELETE /skills-management/api/mcp                   # {serverName}                卸载（仅本页新增的）
 ```
 
-`profile` 缺省取活动 profile（`config.mcpProfile` → `$SKILLS_MCP_PROFILE` → `$DSH_DESKTOP_DEFAULT_PROFILE` → `$DSH_PROFILE`）；也可用 `config.mcpProfileDir` 直接钉住某个 profile 目录（此时 profile 名取目录名）。
+MCP 路由没有任何 profile 参数：作用对象就是运行中的这个 dsh 实例（loader 里有什么就管什么）。
 
 原 `POST /api/install` 的 `from` 现在是**必填**（原来 `from` 缺省/`'market'` 表示从市场装），`/api/market/*` 与 `/api/share/run` 已移除并返回 404（有回归测试守着）。
 
@@ -120,9 +119,9 @@ DELETE /skills-management/api/mcp[?profile=<name>]  # {ids:[…]} 或 {id}
 
 验收方式：拿本机 10 个真实 SKILL.md（claude / agents / codex / dsh preset）与 `yaml.parse` 做差分，`name` / `description` / `version` / `author` / `license` / `whenToUse` / 正文**逐字节一致**；另有 25 条构造用例（引号、冒号、注释、块标量、CRLF、unicode、畸形数组…）。
 
-## 自写 patch 层读写（MCP 管理用）
+## 自写 MCP 状态存储
 
-`src/mcp-profile.js` 负责在 `cordis.patch.yml` 里维护 MCP 条目。它只解析**本插件自己生成**的那一小段 YAML（两层嵌套映射 + 标量序列），不实现通用 YAML：所有字符串一律加引号输出，所以值不会被误读成数字/布尔/`null`/标签；输入侧对无法说明的行直接抛错（见上文写入规则）。已有 21 条测试覆盖引导、幂等重写、标记外内容保留、CRLF、`!!js` 往返、类型陷阱、校验与拒绝路径。
+`src/mcp-manager.js` 只写一个文件：`$DSH_HOME/skills-management/mcp.json`（原子写 + 串行化，损坏或缺席都当空状态）。它存两件事：被停用的 `serverName` 列表，以及本页新增的 server（含 `enabled`）。读取侧对结构不符的条目一律丢弃而不是修补，因为半个理解的条目比缺一条更糟。19 条测试覆盖存储往返、原子性、损坏降级、校验、`!!js` 解析，以及用假 loader/tools/agents 跑完整的增删改流程——包括「deny 集合没变就不重复 restrict」这条防止无限递归的守卫。
 
 ## 安装 / 使用
 
@@ -155,26 +154,26 @@ dsh plugin why @weibaohui/skills-management      # 应显示 link:D:\11dsh\skill
 
 然后打开 Web UI → **设置** → 左侧「技能管理」。卸载：`dsh plugin remove @weibaohui/skills-management`。
 
-设置页侧栏里会出现**两个**条目：
+设置页侧栏里会出现**两个**同级条目：
 
 - **技能管理**：执行器卡片 → 钻入看该来源技能 → 安装 / 删除 / 隐藏；⚙ 执行器目录：改目录、停用、新增自定义来源、恢复默认；详情页可预览 SKILL.md 全文与附属文件、切换模型可调用
-- **MCP 管理**：列出/新增/编辑/停用/删除当前 profile 的 MCP server（见上文「MCP 管理」）
+- **MCP 管理**：列出所有 MCP server，开关 / 新增 / 删除（见上文「MCP 管理」）
 
 ## 开发
 
 ```bash
 npm install                # 只装 devDeps（@deepseek-ai/schemastery）；运行期依赖为空
-npm run check              # 语法检查（src/index.js、src/mcp-profile.js、client/index.js）
-npm test                   # node --test（宿主面 32 + MCP 21 + 客户端面 19）
+npm run check              # 语法检查（src/index.js、src/mcp-manager.js、client/index.js）
+npm test                   # node --test（宿主面 32 + MCP 19 + 客户端面 20）
 npm run build:client       # 由 client/index.js 生成 client/bundle.js
 ```
 
 > `npm test`（即 `node --test`）通过子进程跑测试文件；在受限沙箱里子进程 `stdio` 管道会被拒（`spawn EPERM`）。此时改为直接执行测试文件即可：
-> `node test/skills.test.mjs && node test/mcp-profile.test.mjs && node test/ui.test.mjs`。
+> `node test/skills.test.mjs && node test/mcp-manager.test.mjs && node test/ui.test.mjs`。
 
 `client/bundle.js` 是构建产物，改完 `client/index.js` 必须重新 `build:client`（`test/ui.test.mjs` 有一条「bundle 是否为最新构建」的断言守着）。
 
-MCP 相关的测试都在临时目录里跑，不会碰你真实的 `~/.dsh/profiles`。
+MCP 相关的测试全部用临时 `DSH_HOME` 和假 loader/tools/agents，不会碰你真实的 `~/.dsh`。
 
 依赖已按 `package-lock.json` 锁定；卸载/重装请使用 `npm ci`。
 
@@ -182,13 +181,13 @@ MCP 相关的测试都在临时目录里跑，不会碰你真实的 `~/.dsh/prof
 
 | 文件 | 作用 |
 | --- | --- |
-| `src/index.js` | 宿主端：执行器扫描、本地 API、skill provider、frontmatter 读取器、MCP 路由 |
-| `src/mcp-profile.js` | profile 的 `cordis.patch.yml` 读写：标记块、YAML 子集、`!!js` 安全子集 |
-| `client/index.js` | 客户端 React 源码：设置区页面（技能 + MCP）+ composer「＋技能」按钮 |
+| `src/index.js` | 宿主端：执行器扫描、本地 API、skill provider、frontmatter 读取器、MCP 运行时与路由 |
+| `src/mcp-manager.js` | MCP 状态存储、输入校验、loader/restrict 的纯逻辑 |
+| `client/index.js` | 客户端 React 源码：设置区两个区块（技能 / MCP）+ composer「＋技能」按钮 |
 | `client/bundle.js` | 构建产物（`npm run build:client` 生成，勿手改） |
 | `cordis.patch.yml` | 插件接入宿主 composition 的 insert 行 |
 | `test/skills.test.mjs` | 宿主面测试（含「无子进程/无网络/无第三方 require」守卫） |
-| `test/mcp-profile.test.mjs` | MCP 读写与路由测试 |
+| `test/mcp-manager.test.mjs` | MCP 存储、校验、loader/restrict 与路由测试 |
 | `test/ui.test.mjs` | 客户端面测试（含「无市场/分享残留 + bundle 新鲜度」守卫） |
 
 ## 许可

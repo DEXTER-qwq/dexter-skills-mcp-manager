@@ -1,0 +1,486 @@
+// Tests for src/mcp-manager.js and the host's MCP surface.
+//
+// Design under test: MCP servers are listed from the LOADER (never by parsing
+// a config file), toggling is a per-agent tools.restrict({ deny }) layer, and
+// adding/removing mounts a real loader entry. The only file written is this
+// plugin's own state, so these tests must prove that (a) the state survives a
+// round-trip, (b) validation refuses junk, and (c) the restrict layer is
+// swapped only when the deny set really changes — swapping it unconditionally
+// recurses through `tools/change` and wedges the process.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const mcpManager = require('../src/mcp-manager.js')
+const plugin = require('../src/index.js')
+
+const MCP_PLUGIN_NAME = mcpManager.MCP_PLUGIN_NAME
+
+/** Point DSH_HOME at a temp dir so nothing touches the real ~/.dsh. */
+async function withHome(fn) {
+  const home = await mkdtemp(join(tmpdir(), 'dsh-mcp-mgr-'))
+  const prev = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  try { return await fn(home) } finally {
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev
+    await rm(home, { recursive: true, force: true })
+  }
+}
+
+// ── state store ─────────────────────────────────────────────────────────
+
+test('the store round-trips state through <DSH_HOME>/skills-management/mcp.json', async () => {
+  await withHome(async (home) => {
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    store.loadSync()
+    assert.deepEqual(store.get(), { version: 1, disabled: [], servers: [] })
+    assert.equal(store.file, join(home, 'skills-management', 'mcp.json'))
+
+    await store.replace({
+      version: 1,
+      disabled: ['github', 'github'],
+      servers: [{ serverName: 'local', transport: 'stdio', command: 'npx', args: ['-y', 'x'], env: {} }],
+    })
+
+    // a fresh store (another process / next boot) reads the same thing back
+    const reopened = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    reopened.loadSync()
+    const state = reopened.get()
+    assert.deepEqual(state.disabled, ['github'], 'disabled list is de-duplicated')
+    assert.equal(state.servers.length, 1)
+    assert.equal(state.servers[0].serverName, 'local')
+    assert.equal(state.servers[0].enabled, true, 'enabled defaults to true when absent')
+
+    const raw = JSON.parse(await readFile(store.file, 'utf8'))
+    assert.equal(raw.version, 1)
+    assert.equal(raw.servers[0].command, 'npx')
+  })
+})
+
+test('a corrupt or missing state file degrades to empty instead of throwing', async () => {
+  await withHome(async (home) => {
+    const dir = join(home, 'skills-management')
+    await mkdir(dir, { recursive: true })
+
+    const missing = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    assert.deepEqual(missing.loadSync(), { version: 1, disabled: [], servers: [] })
+
+    await writeFile(join(dir, 'mcp.json'), '{ not json')
+    const broken = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    assert.deepEqual(broken.loadSync(), { version: 1, disabled: [], servers: [] })
+
+    // structurally wrong entries are dropped, not repaired
+    await writeFile(join(dir, 'mcp.json'), JSON.stringify({
+      version: 1,
+      disabled: ['ok-name', 'bad name', 42, 'a'.repeat(40)],
+      servers: [
+        { serverName: 'good', transport: 'stdio', command: 'c' },
+        { serverName: 'bad name', transport: 'stdio', command: 'c' },
+        { serverName: 'no-transport', command: 'c' },
+        { serverName: 'good', transport: 'stdio', command: 'duplicate' },
+        'not an object',
+      ],
+    }))
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    store.loadSync()
+    assert.deepEqual(store.get().disabled, ['ok-name'])
+    assert.deepEqual(store.get().servers.map((s) => s.serverName), ['good'])
+  })
+})
+
+test('writes are atomic: no temp file is left behind', async () => {
+  await withHome(async (home) => {
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    store.loadSync()
+    await store.replace({ version: 1, disabled: [], servers: [] })
+    await store.replace({ version: 1, disabled: ['a'], servers: [] })
+    const dir = join(home, 'skills-management')
+    const { readdir } = await import('node:fs/promises')
+    const entries = await readdir(dir)
+    assert.deepEqual(entries, ['mcp.json'], `expected only the state file, saw ${entries.join(', ')}`)
+  })
+})
+
+// ── validation ──────────────────────────────────────────────────────────
+
+test('validateServerInput produces the exact dsh-mcp-client config shape', () => {
+  assert.deepEqual(
+    mcpManager.validateServerInput({ serverName: 'gh', transport: 'stdio', command: ' npx ', args: 'a\nb\n', cwd: ' /tmp ', env: { T: '${TOKEN}', L: 'lit' } }),
+    { serverName: 'gh', transport: 'stdio', command: 'npx', args: ['a', 'b'], cwd: '/tmp', env: { T: { js: 'process.env.TOKEN' }, L: 'lit' } })
+  assert.deepEqual(
+    mcpManager.validateServerInput({ serverName: 'web', transport: 'streamable-http', url: 'https://h/mcp', headers: { A: 'b' }, toolCallTimeoutMs: '5000' }),
+    { serverName: 'web', transport: 'streamable-http', url: 'https://h/mcp', headers: { A: 'b' }, toolCallTimeoutMs: 5000 })
+})
+
+test('validateServerInput refuses what the MCP client would refuse', () => {
+  const bad = [
+    [{ serverName: 'has space', transport: 'stdio', command: 'c' }, /serverName/],
+    [{ serverName: '', transport: 'stdio', command: 'c' }, /serverName/],
+    [{ serverName: 'a'.repeat(33), transport: 'stdio', command: 'c' }, /serverName/],
+    [{ serverName: 'a', transport: 'nope', command: 'c' }, /transport/],
+    [{ serverName: 'a', transport: 'stdio' }, /command is required/],
+    [{ serverName: 'a', transport: 'streamable-http', url: 'ftp://x' }, /http\(s\)/],
+    [{ serverName: 'a', transport: 'streamable-http', url: 'not a url' }, /not a valid URL/],
+    [{ serverName: 'a', transport: 'stdio', command: 'c', env: { '1BAD': 'x' } }, /must match/],
+    [{ serverName: 'a', transport: 'stdio', command: 'c', env: { A: 1 } }, /must be a string/],
+    [{ serverName: 'a', transport: 'stdio', command: 'c', args: [1] }, /array of strings/],
+    [{ serverName: 'a', transport: 'stdio', command: 'c', toolCallTimeoutMs: '0' }, /positive integer/],
+    [null, /must be an MCP server object/],
+  ]
+  for (const [input, re] of bad) assert.throws(() => mcpManager.validateServerInput(input), re, JSON.stringify(input))
+})
+
+test('only the process.env.NAME !!js form is accepted from the API', () => {
+  assert.throws(
+    () => mcpManager.validateServerInput({ serverName: 'a', transport: 'stdio', command: 'c', env: { X: { js: 'require("child_process").execSync("x")' } } }),
+    /process\.env\.NAME/)
+  assert.throws(
+    () => mcpManager.validateServerInput({ serverName: 'a', transport: 'stdio', command: 'c', env: { X: { js: 'process.env.A || "b"' } } }),
+    /process\.env\.NAME/)
+})
+
+test('mcpClientConfig resolves env references at mount time, never passing the expression through', () => {
+  const server = mcpManager.validateServerInput({ serverName: 'gh', transport: 'stdio', command: 'npx', env: { T: '${MCP_TEST_TOKEN}', L: 'literal' } })
+  const prev = process.env.MCP_TEST_TOKEN
+  try {
+    process.env.MCP_TEST_TOKEN = 'sekret'
+    assert.deepEqual(mcpManager.mcpClientConfig(server).env, { T: 'sekret', L: 'literal' })
+    delete process.env.MCP_TEST_TOKEN
+    // unset: the key is omitted rather than leaking 'process.env.MCP_TEST_TOKEN'
+    assert.deepEqual(mcpManager.mcpClientConfig(server).env, { L: 'literal' })
+  } finally {
+    if (prev === undefined) delete process.env.MCP_TEST_TOKEN; else process.env.MCP_TEST_TOKEN = prev
+  }
+  assert.equal(mcpManager.mcpClientConfig({ serverName: 'w', transport: 'http' }).failOnStartupError, false)
+  assert.equal(typeof mcpManager.mcpClientConfig({ serverName: 'w', transport: 'stdio', command: 'c' }).toolCallTimeoutMs, 'number')
+})
+
+// ── loader / tools helpers ──────────────────────────────────────────────
+
+const entry = (id, serverName, extra = {}) => ({
+  options: { id, name: MCP_PLUGIN_NAME, config: { serverName, transport: 'stdio', command: 'c', ...extra } },
+  fiber: {},
+  disabled: false,
+})
+
+test('configuredServers reads the loader and skips this plugin\'s own mounts', () => {
+  const loader = {
+    entries: () => [
+      entry('mcp-github', 'github'),
+      entry('sm-mcp-local', 'local'),          // ours: must not be listed as configured
+      { options: { id: 'x', name: 'other-plugin', config: {} } },
+      { options: { id: 'y', name: MCP_PLUGIN_NAME, config: {} } },   // no serverName
+      { options: { id: 'z', name: MCP_PLUGIN_NAME, config: { serverName: 'dead' } }, disabled: true },
+    ],
+  }
+  const servers = mcpManager.configuredServers(loader)
+  assert.deepEqual(servers.map((s) => s.config.serverName), ['github', 'dead'])
+  assert.equal(servers[0].live, true)
+  assert.equal(servers[1].live, false, 'a disabled loader entry is not live')
+  assert.deepEqual(mcpManager.configuredServers(undefined), [])
+})
+
+test('denyNamesForDisabled only names tools that are actually live', () => {
+  const schemas = [
+    { name: 'mcp__github__create' },
+    { name: 'mcp__github__list' },
+    { name: 'mcp__other__x' },
+    { name: 'run_code' },
+  ]
+  assert.deepEqual(mcpManager.denyNamesForDisabled(['github'], schemas),
+    ['mcp__github__create', 'mcp__github__list'])
+  // an empty/absent tool surface yields nothing — tools.restrict would throw on unknown names
+  assert.deepEqual(mcpManager.denyNamesForDisabled(['offline'], schemas), [])
+  assert.deepEqual(mcpManager.denyNamesForDisabled([], schemas), [])
+})
+
+test('toolsOfServer counts exactly one namespace', () => {
+  const schemas = [{ name: 'mcp__gh__a' }, { name: 'mcp__gh__b' }, { name: 'mcp__ghx__c' }]
+  assert.deepEqual(mcpManager.toolsOfServer(schemas, 'gh'), ['mcp__gh__a', 'mcp__gh__b'])
+  assert.deepEqual(mcpManager.toolsOfServer([], 'gh'), [])
+})
+
+test('listServers merges configured + user servers and applies remembered flags', () => {
+  const loader = { entries: () => [entry('mcp-github', 'github'), entry('mcp-web', 'web', { transport: 'streamable-http' })] }
+  const state = {
+    version: 1,
+    disabled: ['web'],
+    servers: [{ serverName: 'local', transport: 'stdio', command: 'npx', args: [], env: {}, enabled: true }],
+  }
+  const schemas = [{ name: 'mcp__github__create' }, { name: 'mcp__local__run' }]
+  const rows = mcpManager.listServers(loader, state, schemas)
+  assert.deepEqual(rows.map((r) => r.serverName), ['github', 'local', 'web'])
+  const byName = Object.fromEntries(rows.map((r) => [r.serverName, r]))
+  assert.equal(byName.github.source, 'configured')
+  assert.equal(byName.github.enabled, true)
+  assert.equal(byName.github.toolCount, 1)
+  assert.equal(byName.web.source, 'configured')
+  assert.equal(byName.web.enabled, false)
+  assert.equal(byName.local.source, 'user')
+  assert.equal(byName.local.toolCount, 1)
+})
+
+// ── the host surface, with a fake loader / tools / agents ───────────────
+
+/** Fake ctx capturing everything the host half registers. */
+function fakeCtx({ entries = [], schemas = [] } = {}) {
+  const created = []
+  const removed = []
+  const restrictions = []
+  const disposers = []
+  const listeners = new Map()
+  const effects = []
+  const agents = []
+  const loader = {
+    entries: () => entries,
+    async create(options) { created.push(options); entries.push({ options, fiber: {}, disabled: false }) },
+    async remove(id) {
+      removed.push(id)
+      const at = entries.findIndex((e) => e.options.id === id)
+      if (at >= 0) entries.splice(at, 1)
+    },
+  }
+  const ctx = {
+    logger: { warn() {}, error() {}, info() {} },
+    // the host half always registers its skill provider, so the fake needs it
+    skills: { registerProvider: () => () => {} },
+    get(name) {
+      if (name === 'loader') return loader
+      if (name === 'tools') return { schemas: () => schemas }
+      if (name === 'agents') return { list: () => agents }
+      return undefined
+    },
+    on(name, listener) { listeners.set(name, listener); return () => {} },
+    // like the real Cordis: the callback runs immediately and its return value
+    // is the disposer, so registered routes/effects exist after apply() returns
+    effect(callback, label) {
+      const result = typeof callback === 'function' ? callback() : undefined
+      effects.push({ callback, label, result })
+      return typeof result === 'function' ? result : () => {}
+    },
+  }
+  const agent = (id) => {
+    const layers = []
+    const a = {
+      id,
+      ctx: { get: (name) => (name === 'tools' ? {
+        restrict(filter) {
+          const layer = { id, deny: [...(filter.deny ?? [])] }
+          layers.push(layer)
+          restrictions.push(layer)
+          disposers.push(layer)
+          // real restrict() emits tools/change synchronously — reproduce that
+          const emit = listeners.get('tools/change')
+          if (emit) emit()
+          return () => { const at = layers.indexOf(layer); if (at >= 0) layers.splice(at, 1) }
+        },
+      } : undefined) },
+      layers,
+    }
+    agents.push(a)
+    return a
+  }
+  return { ctx, loader, created, removed, restrictions, agents, agent, listeners, effects }
+}
+
+/** Build a ctx that also captures the web route, then return a `call` helper. */
+function setupWithRoutes({ entries = [], schemas = [], config = {} } = {}) {
+  const fake = fakeCtx({ entries, schemas })
+  let handler
+  fake.ctx.webServer = { register: (route) => { handler = route.handler; return () => {} } }
+  plugin.apply(fake.ctx, { installedDir: 'C:/definitely-missing-skills', ...config })
+  const call = async (method, url, body) => {
+    const req = new EventEmitter()
+    req.method = method
+    req.url = url
+    req.headers = {}
+    const out = {}
+    const res = { writeHead(status) { out.status = status }, end(chunk) { out.body = chunk === undefined ? '' : String(chunk) } }
+    if (body !== undefined) setTimeout(() => { req.emit('data', Buffer.from(JSON.stringify(body))); req.emit('end') }, 20)
+    await handler(req, res)
+    return { status: out.status, payload: out.body ? JSON.parse(out.body) : undefined }
+  }
+  return { ...fake, call }
+}
+
+test('GET /api/mcp lists loader servers joined with the plugin state', async () => {
+  await withHome(async () => {
+    const { call } = setupWithRoutes({
+      entries: [entry('mcp-github', 'github')],
+      schemas: [{ name: 'mcp__github__create' }],
+    })
+    const got = await call('GET', '/skills-management/api/mcp')
+    assert.equal(got.status, 200)
+    assert.equal(got.payload.loaderAvailable, true)
+    assert.equal(got.payload.mountAvailable, true)
+    assert.equal(got.payload.servers.length, 1)
+    assert.equal(got.payload.servers[0].serverName, 'github')
+    assert.equal(got.payload.servers[0].source, 'configured')
+    assert.equal(got.payload.servers[0].enabled, true)
+    assert.equal(got.payload.servers[0].toolCount, 1)
+    assert.ok(got.payload.stateFile.includes('mcp.json'))
+  })
+})
+
+test('adding a server mounts a loader entry and persists it', async () => {
+  await withHome(async () => {
+    const { call, created, loader } = setupWithRoutes()
+    const created1 = await call('POST', '/skills-management/api/mcp', {
+      serverName: 'local', transport: 'stdio', command: 'npx', args: ['-y', 'pkg'],
+    })
+    assert.equal(created1.status, 201)
+    assert.equal(created1.payload.created, 'local')
+    assert.equal(created.length, 1)
+    assert.deepEqual(created[0].id, 'sm-mcp-local')
+    assert.equal(created[0].name, MCP_PLUGIN_NAME)
+    assert.equal(created[0].config.serverName, 'local')
+    assert.equal(created[0].config.failOnStartupError, false)
+
+    // it now appears in the list as a user server, and not twice
+    const listed = await call('GET', '/skills-management/api/mcp')
+    assert.deepEqual(listed.payload.servers.map((s) => s.serverName), ['local'])
+    assert.equal(listed.payload.servers[0].source, 'user')
+    assert.equal(loader.entries().filter((e) => e.options.name === MCP_PLUGIN_NAME).length, 1)
+
+    // a duplicate is refused
+    const dup = await call('POST', '/skills-management/api/mcp', { serverName: 'local', transport: 'stdio', command: 'npx' })
+    assert.equal(dup.status, 409)
+
+    // invalid input is a 400
+    const bad = await call('POST', '/skills-management/api/mcp', { serverName: 'has space', transport: 'stdio', command: 'x' })
+    assert.equal(bad.status, 400)
+
+    // and it survives a restart of the plugin (same DSH_HOME, fresh apply)
+    const second = setupWithRoutes()
+    const after = await second.call('GET', '/skills-management/api/mcp')
+    assert.deepEqual(after.payload.servers.map((s) => s.serverName), ['local'])
+  })
+})
+
+test('removing only works for servers this plugin added', async () => {
+  await withHome(async () => {
+    const { call, removed } = setupWithRoutes({ entries: [entry('mcp-github', 'github')], schemas: [] })
+    await call('POST', '/skills-management/api/mcp', { serverName: 'local', transport: 'stdio', command: 'npx' })
+
+    const refused = await call('DELETE', '/skills-management/api/mcp', { serverName: 'github' })
+    assert.equal(refused.status, 409)
+    assert.match(refused.payload.error, /composition layer|cannot be removed/)
+
+    const unknown = await call('DELETE', '/skills-management/api/mcp', { serverName: 'nope' })
+    assert.equal(unknown.status, 404)
+
+    const gone = await call('DELETE', '/skills-management/api/mcp', { serverName: 'local' })
+    assert.equal(gone.status, 200)
+    assert.deepEqual(gone.payload.servers.map((s) => s.serverName), ['github'], 'the configured row stays')
+    assert.deepEqual(removed, ['sm-mcp-local'])
+  })
+})
+
+test('toggling a configured server restricts its tools per agent and is remembered', async () => {
+  await withHome(async () => {
+    const { call, agent, restrictions, listeners } = setupWithRoutes({
+      entries: [entry('mcp-github', 'github')],
+      schemas: [{ name: 'mcp__github__create' }, { name: 'mcp__github__list' }, { name: 'run_code' }],
+    })
+    // the host wires one agent-less world in this fake; create one and let the
+    // agent/created listener apply the current restriction
+    const a = agent('agent-1')
+    listeners.get('agent/created')({ agent: a })
+
+    const off = await call('PUT', '/skills-management/api/mcp', { serverName: 'github', enabled: false })
+    assert.equal(off.status, 200)
+    const row = off.payload.servers.find((s) => s.serverName === 'github')
+    assert.equal(row.enabled, false)
+    assert.deepEqual(a.layers.map((l) => l.deny), [['mcp__github__create', 'mcp__github__list']])
+
+    // repeating the same toggle must NOT swap the restriction layer again:
+    // restrict() emits tools/change, whose listener re-runs the same function
+    const before = restrictions.length
+    await call('PUT', '/skills-management/api/mcp', { serverName: 'github', enabled: false })
+    assert.equal(restrictions.length, before, 'an unchanged deny set must not touch the registry')
+
+    const on = await call('PUT', '/skills-management/api/mcp', { serverName: 'github', enabled: true })
+    assert.equal(on.payload.servers.find((s) => s.serverName === 'github').enabled, true)
+    assert.deepEqual(a.layers, [], 'enabling releases the restriction')
+  })
+})
+
+test('toggling a user server unmounts and remounts the loader entry', async () => {
+  await withHome(async () => {
+    const { call, removed } = setupWithRoutes()
+    await call('POST', '/skills-management/api/mcp', { serverName: 'local', transport: 'stdio', command: 'npx' })
+
+    const off = await call('PUT', '/skills-management/api/mcp', { serverName: 'local', enabled: false })
+    assert.equal(off.status, 200)
+    assert.equal(off.payload.servers.find((s) => s.serverName === 'local').enabled, false)
+    assert.deepEqual(removed, ['sm-mcp-local'], 'disabling unmounts')
+
+    const on = await call('PUT', '/skills-management/api/mcp', { serverName: 'local', enabled: true })
+    assert.equal(on.payload.servers.find((s) => s.serverName === 'local').enabled, true)
+    assert.equal(on.payload.servers.find((s) => s.serverName === 'local').live, true, 're-enabling remounts')
+
+    const bad = await call('PUT', '/skills-management/api/mcp', { serverName: 'local' })
+    assert.equal(bad.status, 400)
+    const missing = await call('PUT', '/skills-management/api/mcp', { serverName: 'nope', enabled: false })
+    assert.equal(missing.status, 404)
+  })
+})
+
+test('the state file is the only thing written', async () => {
+  await withHome(async (home) => {
+    const { call } = setupWithRoutes({ entries: [entry('mcp-github', 'github')] })
+    await call('PUT', '/skills-management/api/mcp', { serverName: 'github', enabled: false })
+    await call('POST', '/skills-management/api/mcp', { serverName: 'local', transport: 'stdio', command: 'npx' })
+
+    const { readdir } = await import('node:fs/promises')
+    const written = await readdir(join(home, 'skills-management'))
+    assert.deepEqual(written, ['mcp.json'])
+    const state = JSON.parse(await readFile(join(home, 'skills-management', 'mcp.json'), 'utf8'))
+    assert.deepEqual(state.disabled, ['github'])
+    assert.deepEqual(state.servers.map((s) => s.serverName), ['local'])
+    assert.equal(existsSync(join(home, 'profiles')), false, 'no profile directory is ever created')
+  })
+})
+
+test('apply() stays synchronous and wires the MCP listeners', async () => {
+  await withHome(async () => {
+    const fake = fakeCtx({ entries: [entry('mcp-github', 'github')] })
+    fake.ctx.webServer = { register: () => () => {} }
+    const result = plugin.apply(fake.ctx, { installedDir: 'C:/definitely-missing-skills' })
+    assert.equal(typeof result?.then, 'undefined', 'apply() must not return a promise')
+    for (const name of ['agent/created', 'agent/disposed', 'tools/change']) {
+      assert.ok(fake.listeners.has(name), `listener ${name} registered`)
+    }
+    assert.ok(fake.effects.some((e) => /MCP/.test(e.label ?? '')), 'MCP effect registered')
+  })
+})
+
+test('with no loader/tools services the pane still reports state instead of failing', async () => {
+  await withHome(async () => {
+    let handler
+    const ctx = {
+      logger: { warn() {}, error() {} },
+      skills: { registerProvider: () => () => {} },
+      webServer: { register: (route) => { handler = route.handler; return () => {} } },
+      effect: (fn) => fn(),
+    }
+    plugin.apply(ctx, { installedDir: 'C:/definitely-missing-skills' })
+    const req = new EventEmitter()
+    req.method = 'GET'
+    req.url = '/skills-management/api/mcp'
+    req.headers = {}
+    const out = {}
+    const res = { writeHead(s) { out.status = s }, end(c) { out.body = String(c ?? '') } }
+    await handler(req, res)
+    assert.equal(out.status, 200)
+    const payload = JSON.parse(out.body)
+    assert.equal(payload.loaderAvailable, false)
+    assert.deepEqual(payload.servers, [])
+  })
+})
