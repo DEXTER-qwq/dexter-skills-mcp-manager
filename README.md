@@ -15,7 +15,6 @@ DSH（DeepSeek Harness）插件：给 Web 设置页加两个同级入口 —— 
 - **删除技能**：按来源删除；显式标记为只读的来源会拒绝删除。
 - **模型可见性治理**：切换 dsh 原生 frontmatter 键 `disable-model-invocation`，覆盖用户库与 `~/.agents/skills`。原样保留其余字段与正文，原子写回。
 - **执行器目录管理**：内置来源可以改目录、可以停用，也可以新增自定义来源、一键恢复默认；走宿主 settings 服务持久化，保存即生效。
-- **注入开销统计**：显示「名称 + 描述」（截断前全文）的字符数，可按字符排序。如果宿主注入了分词器，也会显示 ≈token 数（默认不装分词器，只给精确字符数）。
 
 ## MCP 管理
 
@@ -97,7 +96,7 @@ PUT    /skills-management/api/mcp                    # {serverName, enabled} 打
 ```bash
 npm install            # 只装 devDeps（@deepseek-ai/schemastery）；运行期依赖为空
 npm run check          # 语法检查：src/index.js、src/mcp-manager.js、client/index.js
-npm test               # node --test：宿主面 32 + MCP 35 + 客户端面 18
+npm test               # node --test：宿主面 28 + MCP 35 + 客户端面 14
 npm run build:client   # 由 client/index.js 生成 client/bundle.js
 ```
 

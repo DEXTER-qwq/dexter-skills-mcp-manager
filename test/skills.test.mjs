@@ -681,7 +681,7 @@ test('GET /api lists only the local library', async () => {
     assert.equal(list.payload.market, undefined)
     assert.equal(list.payload.sources, undefined)
     const inst = list.payload.installed.find((s) => s.name === 'beta')
-    assert.equal(inst.chars, 'beta\nInstalled skill here'.length)
+    assert.equal(inst.chars, undefined, 'the injection-cost stats are gone from the response')
     assert.equal(inst.tokens, undefined)
   } finally {
     await rm(root, { recursive: true, force: true })
@@ -741,68 +741,3 @@ test('PUT /invocation also covers the user-agents root (~/.agents/skills)', asyn
   }
 })
 
-// ── 注入开销估算（字符数；token 为可选注入）───────────────────────────────
-
-test('usageStat reports exact char counts of the untruncated name+description', () => {
-  const { usageStat } = plugin.__internals
-  assert.deepEqual(usageStat('hello', 'hello world'), { chars: 17 })
-  assert.deepEqual(usageStat('自动续跑', '会话结束后自动继续执行，直到任务完成或达到上限'), { chars: 28 })
-  assert.deepEqual(usageStat('x', ''), { chars: 2 })
-  // 非字符串 description 容错
-  assert.deepEqual(usageStat('x', undefined), { chars: 2 })
-  assert.deepEqual(usageStat(undefined, 'body'), { chars: 5 })
-  // 无第三方词表 ⇒ 不带 tokens 字段（客户端据此只渲染字符数）
-  assert.equal(usageStat('hello', 'hello world').tokens, undefined)
-})
-
-test('usageStat accepts an injected token encoder and memoizes per text', () => {
-  const { usageStat, usageMemo, setTokenEncoder } = plugin.__internals
-  let calls = 0
-  setTokenEncoder({ encode: (text) => { calls += 1; return text.split(/\s+/).filter(Boolean) } })
-  try {
-    const text = 'memo-probe\na repeated description for the memo probe'
-    usageMemo.delete(text)
-    const first = usageStat('memo-probe', 'a repeated description for the memo probe')
-    assert.equal(typeof first.tokens, 'number')
-    assert.equal(first.chars, text.length)
-    const afterFirst = calls
-    const again = usageStat('memo-probe', 'a repeated description for the memo probe')
-    assert.equal(again.tokens, first.tokens)
-    assert.equal(calls, afterFirst, 'second call must hit the memo, not the encoder')
-  } finally {
-    setTokenEncoder(undefined)
-    usageMemo.clear()
-  }
-})
-
-test('usageStat degrades to chars-only when the encoder throws or is absent', () => {
-  const { usageStat, setTokenEncoder } = plugin.__internals
-  setTokenEncoder({ encode: () => { throw new Error('no ranks') } })
-  try {
-    const stat = usageStat('fallback', 'no encoder here')
-    assert.equal(stat.tokens, undefined)
-    assert.equal(stat.chars, 'fallback\nno encoder here'.length)
-  } finally {
-    setTokenEncoder(undefined)
-  }
-  // 默认（未注入）同样只有字符数
-  assert.equal(usageStat('plain', 'x').tokens, undefined)
-})
-
-test('executor drill-in rows carry char usage', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-skills-usage-ex-'))
-  try {
-    await writeSkill(join(root, 'cc'), 'foo', { name: 'foo', description: 'Executor skill desc' })
-    const env = setupPlugin({
-      installedDir: join(root, 'installed'),
-      executorDirs: { claudecode: join(root, 'cc') },
-    })
-    const scoped = await env.call('GET', '/skills-management/api/executors?executor=claudecode')
-    assert.equal(scoped.status, 200)
-    const foo = scoped.payload.executor.skills.find((s) => s.name === 'foo')
-    assert.equal(foo.chars, 'foo\nExecutor skill desc'.length)
-    assert.equal(foo.tokens, undefined, 'no encoder installed ⇒ no token field')
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-})

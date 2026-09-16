@@ -547,55 +547,6 @@ function truncateDescription(text) {
   return single.length > DESCRIPTION_LIMIT ? single.slice(0, DESCRIPTION_LIMIT) + '…' : single
 }
 
-// ── 注入开销估算（字符数 + 可选 token 估算器）─────────────────────────────
-// 技能注入模型 = 名称+描述，指标取该文本的字符长度。列表接口的 description
-// 是截断展示，统计必须喂截断前的全文。
-//
-// 原版用 js-tiktoken 的 cl100k_base 词表额外估算 token 数；本 fork 移除了该
-// 依赖（运行期第三方依赖归零）。字符数是精确值，token 数在原版里也只是
-// 「与 tiktokenizer 同词表」的近似值（DeepSeek 实际分词不同），故默认不再给出。
-//
-// 想恢复 token 数：`npm i js-tiktoken`，再把下面 usageTokenEncoder() 的
-// 注释块打开即可（或者在宿主里注入一个编码器：见 __internals.setTokenEncoder，
-// 任何带 `.encode(text) → array` 的对象都可以，客户端会自动改渲染 token）。
-const USAGE_MEMO_CAP = 25000
-const usageMemo = new Map()
-let tokenEncoder
-let tokenEncoderResolved = false
-let tokenEncoderOverride // 测试/宿主注入点：undefined 走正常解析
-
-/** cl100k_base 编码器（可选依赖，缺失即静默降级为只出字符数）。 */
-function usageTokenEncoder() {
-  if (tokenEncoderOverride !== undefined) return tokenEncoderOverride
-  if (tokenEncoderResolved) return tokenEncoder
-  tokenEncoderResolved = true
-  tokenEncoder = null
-  // 需要 token 估算时打开这两行（并 npm i js-tiktoken）：
-  // try {
-  //   const { Tiktoken } = require('js-tiktoken/lite')
-  //   tokenEncoder = new Tiktoken(require('js-tiktoken/ranks/cl100k_base'))
-  // } catch { tokenEncoder = null }
-  return tokenEncoder
-}
-
-function usageStat(name, description) {
-  const desc = typeof description === 'string' ? description : ''
-  const text = `${name || ''}\n${desc}`
-  const stat = { chars: text.length }
-  const enc = usageTokenEncoder()
-  if (enc !== null && enc !== undefined && typeof enc.encode === 'function') {
-    let tokens = usageMemo.get(text)
-    if (tokens === undefined) {
-      try { tokens = enc.encode(text).length } catch { tokens = undefined }
-      if (tokens !== undefined) {
-        if (usageMemo.size >= USAGE_MEMO_CAP) usageMemo.clear()
-        usageMemo.set(text, tokens)
-      }
-    }
-    if (tokens !== undefined) stat.tokens = tokens
-  }
-  return stat
-}
 
 function expandTilde(p) {
   return p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? join(homedir(), p.slice(2)) : p
@@ -665,7 +616,7 @@ function mcpErrorStatus(error) {
 module.exports = {
   name: 'dexter-skills-mcp-manager',
   inject: ['skills', 'webServer', 'settings', 'tools', 'loader'],
-  __internals: { extractFrontmatter, parseSkillMd, parseFrontmatterMeta, invocationPolicy, installDirName, EXECUTOR_DEFS, usageStat, usageMemo, setTokenEncoder: (v) => { tokenEncoderOverride = v } },
+  __internals: { extractFrontmatter, parseSkillMd, parseFrontmatterMeta, invocationPolicy, installDirName, EXECUTOR_DEFS },
 
   apply(ctx, config = {}) {
     const installedDir = resolve(expandTilde(config.installedDir !== undefined ? config.installedDir : process.env.DSH_HOME ? join(process.env.DSH_HOME, 'skills') : join(homedir(), '.dsh', 'skills')))
@@ -944,7 +895,7 @@ module.exports = {
           summary.skillCount += 1
           if (countsOnly) continue
           const { fileCount, totalSize } = await countFilesAndSize(entry.dir)
-          summary.skills.push({ name: listed, relPath: entry.relPath, description: truncateDescription(read.description), keywords: read.keywords, version: read.version, author: read.author, fileCount, totalSize, modifiedAt: read.modifiedAt, modelInvocable: invocationPolicy(read.meta).modelInvocable, ...usageStat(listed, read.description) })
+          summary.skills.push({ name: listed, relPath: entry.relPath, description: truncateDescription(read.description), keywords: read.keywords, version: read.version, author: read.author, fileCount, totalSize, modifiedAt: read.modifiedAt, modelInvocable: invocationPolicy(read.meta).modelInvocable })
         } catch (e) { ctx.logger.warn(`skills-management: skipping ${entry.dir}: ${e && e.message}`) }
       }
       if (summary.skills !== undefined) {
@@ -1151,7 +1102,7 @@ module.exports = {
           if (req.method === 'GET' && apiPath === '/skills-management/api') {
             const { installed } = await discoverInstalled()
             sendJson(res, 200, {
-              installed: await Promise.all(installed.map(async (row) => { const { fileCount, totalSize } = await countFilesAndSize(row.entry.dir); return { name: row.name, description: truncateDescription(row.description), path: row.entry.dir, fileCount, totalSize, modifiedAt: row.modifiedAt, ...usageStat(row.name, row.description) } })),
+              installed: await Promise.all(installed.map(async (row) => { const { fileCount, totalSize } = await countFilesAndSize(row.entry.dir); return { name: row.name, description: truncateDescription(row.description), path: row.entry.dir, fileCount, totalSize, modifiedAt: row.modifiedAt } })),
             })
             return
           }
@@ -1164,8 +1115,7 @@ module.exports = {
             const files = await walkFiles(located.dir, located.dir)
             const { fileCount, totalSize } = await countFilesAndSize(located.dir)
             const { meta, body } = parseSkillMd(content)
-            const usage = usageStat(typeof meta.name === 'string' && meta.name !== '' ? meta.name : basename(name), meta.description)
-            sendJson(res, 200, { name, shortName: basename(name), dir: displayPath(located.dir), executor: located.executorKey, isInstalled: located.isInstalled, content: body, contentWithMeta: content, meta, files, fileCount, totalSize, modifiedAt: files[0]?.modifiedAt, ...usage })
+            sendJson(res, 200, { name, shortName: basename(name), dir: displayPath(located.dir), executor: located.executorKey, isInstalled: located.isInstalled, content: body, contentWithMeta: content, meta, files, fileCount, totalSize, modifiedAt: files[0]?.modifiedAt })
             return
           }
 

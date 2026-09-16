@@ -159,15 +159,6 @@ const ZH = {
   invocationHint: '关闭后技能保留在库里，但不再注入对话目录（skill 工具也调不到）',
   pathLabel: '路径',
   meTag: '本机',
-  usageStat: '≈{tokens} token · {chars} 字符',
-  usageCharsOnly: '{chars} 字符',
-  usageHint: '按「名称+描述」全文估算的注入开销（cl100k_base 词表，DeepSeek 实际分词略有差异，适合横向比较）',
-  usageMetaLabel: '≈注入开销',
-  sortLabel: '排序',
-  sortDefault: '默认排序',
-  sortTokensDesc: 'token 高→低',
-  sortTokensAsc: 'token 低→高',
-  sortCharsDesc: '字符 多→少',
 }
 
 const EN = {
@@ -267,15 +258,6 @@ const EN = {
   invocationHint: 'When off, the skill stays in the library but is not injected into conversation catalogs',
   pathLabel: 'Path',
   meTag: 'me',
-  usageStat: '≈{tokens} tokens · {chars} chars',
-  usageCharsOnly: '{chars} chars',
-  usageHint: 'Estimated injection cost of the full name+description (cl100k_base; DeepSeek tokenizes slightly differently — for comparison, not billing)',
-  usageMetaLabel: '≈Injection cost',
-  sortLabel: 'Sort',
-  sortDefault: 'Default order',
-  sortTokensDesc: 'tokens high→low',
-  sortTokensAsc: 'tokens low→high',
-  sortCharsDesc: 'chars high→low',
 }
 
 // ── Pure helpers ────────────────────────────────────────────────────────
@@ -317,38 +299,6 @@ function matchSkill(s, lower) {
   return (s.name || '').toLowerCase().includes(lower) ||
     (s.description || '').toLowerCase().includes(lower) ||
     (s.keywords || []).some(k => String(k).toLowerCase().includes(lower))
-}
-
-/** 注入开销一行文案：token 在（宿主装了词表）→「≈N token · M 字符」，
- *  降级时只剩字符数；两者都缺（旧响应）→ null 不渲染。 */
-function usageText(s, t) {
-  if (typeof s.tokens === 'number') return t('usageStat', { tokens: s.tokens, chars: s.chars ?? (s.description || '').length })
-  if (typeof s.chars === 'number') return t('usageCharsOnly', { chars: s.chars })
-  return null
-}
-
-/** 卡片排序：缺 token/chars 的行（预热未完成或降级模式）永远沉底，
- *  其余按所选指标升/降序。keyFn 供 {row, s} 包装数组取卡片行。 */
-function sortSkills(rows, sortBy, keyFn = (s) => s) {
-  if (!sortBy || sortBy === 'default') return rows
-  const pick = sortBy === 'chars' ? (s) => keyFn(s).chars : (s) => keyFn(s).tokens
-  const asc = sortBy === 'tokensAsc'
-  return [...rows].sort((a, b) => {
-    const va = pick(a), vb = pick(b)
-    if (va === vb) return 0
-    if (va === undefined || va === null) return 1
-    if (vb === undefined || vb === null) return -1
-    return asc ? va - vb : vb - va
-  })
-}
-
-/** 排序下拉（原生 select：排序是低频操作，不值得自绘 popover）。 */
-function SortSelect({ value, onChange, t }) {
-  return h('select', { value, onChange: e => onChange(e.target.value), style: selectStyle(), title: t('sortLabel'), 'aria-label': t('sortLabel') },
-    h('option', { value: 'default' }, t('sortDefault')),
-    h('option', { value: 'tokens' }, t('sortTokensDesc')),
-    h('option', { value: 'tokensAsc' }, t('sortTokensAsc')),
-    h('option', { value: 'chars' }, t('sortCharsDesc')))
 }
 
 // ── Token-based stylesheet (light/dark adaptive by construction) ────────
@@ -474,7 +424,6 @@ function SourceFilter({ rows, value, onChange, t }) {
 
 function SkillCard({ row, s, t, onOpen, onInstall, onDelete, onToggleVisible }) {
   const name = shortName(s.name)
-  const usage = usageText(s, t)
   return h('div', { className: 'sk-card', role: 'button', tabIndex: 0,
       onClick: () => onOpen(s),
       onKeyDown: e => e.key === 'Enter' && onOpen(s) },
@@ -484,7 +433,6 @@ function SkillCard({ row, s, t, onOpen, onInstall, onDelete, onToggleVisible }) 
         h('div', { className: 'sk-title' }, name),
         (s.fileCount || s.totalSize) && h('div', { className: 'sk-dir' }, `${s.fileCount || 0} · ${formatSize(s.totalSize || 0)} · ${formatTime(s.modifiedAt)}`))),
     h('div', { className: 'sk-desc' }, s.description || ''),
-    usage && h('div', { className: 'sk-stats', title: t('usageHint') }, usage),
     h('div', { className: 'sk-foot' },
       h('div', { className: 'sk-chips' },
         h(Tag, null, row.label),
@@ -628,7 +576,6 @@ function DetailModal({ sel, executors, t, onClose, onInstalled, onDeleted }) {
             h('div', { className: 'sk-meta' },
               h('div', null, h('div', { className: 'sk-dir' }, t('pathLabel')), h('div', { className: 'sk-hint' }, data?.dir || '-')),
               h('div', null, h('div', { className: 'sk-dir' }, t('filesCount', { n: data?.fileCount ?? 0 })), h('div', { className: 'sk-hint' }, formatSize(data?.totalSize || 0))),
-              data && usageText(data, t) && h('div', null, h('div', { className: 'sk-dir' }, t('usageMetaLabel')), h('div', { className: 'sk-hint', title: t('usageHint') }, usageText(data, t))),
               meta.version && h('div', null, h('div', { className: 'sk-dir' }, 'Version'), h('div', { className: 'sk-hint' }, 'v' + meta.version)),
               meta.author && h('div', null, h('div', { className: 'sk-dir' }, 'Author'), h('div', { className: 'sk-hint' }, meta.author))),
             files.length
@@ -832,7 +779,7 @@ function CardsView({ executors, t, onEnter, onBrowseAll, onOpenSettings }) {
   ]
 }
 
-function AllSkillsView({ executors, searchText, sourceFilter, sortBy, t, onSearch, onFilter, onSort, onBack, onOpen, onInstall, onDelete, onToggleVisible }) {
+function AllSkillsView({ executors, searchText, sourceFilter, t, onSearch, onFilter, onBack, onOpen, onInstall, onDelete, onToggleVisible }) {
   const pending = executors.some(x => x.dirExists && !Array.isArray(x.skills))
   if (pending) return h(Spinner, { label: t('loadingCatalogs') })
   let items = []
@@ -842,14 +789,12 @@ function AllSkillsView({ executors, searchText, sourceFilter, sortBy, t, onSearc
     for (const s of row.skills) items.push({ row, s })
   }
   if (searchText) items = items.filter(it => matchSkill(it.s, searchText.toLowerCase()))
-  items = sortSkills(items, sortBy, it => it.s)
   return [
     h('div', { className: 'sk-head' },
       h(P.Button, { variant: 'ghost', size: 'sm', onClick: onBack }, t('backCards')),
       h('span', { className: 'sk-title' }, t('title')),
       h(InputBox, { value: searchText, placeholder: t('searchAll'), onSearch }),
       SourceFilterEl({ rows: executors.filter(r => r.dirExists), value: sourceFilter, onChange: onFilter, t }),
-      SortSelect({ value: sortBy, onChange: onSort, t }),
       h('span', { className: 'spacer' }),
       h(Tag, null, `${items.length} ${t('skillsSuffix')}`)),
     !items.length
@@ -858,7 +803,7 @@ function AllSkillsView({ executors, searchText, sourceFilter, sortBy, t, onSearc
           h(SkillCard, { key: row.key + '/' + s.name, row, s, t, onOpen, onInstall, onDelete, onToggleVisible })))]
 }
 
-function DrillInView({ row, searchText, sortBy, t, onSearch, onSort, onBack, onOpen, onInstall, onDelete, onToggleVisible }) {
+function DrillInView({ row, searchText, t, onSearch, onBack, onOpen, onInstall, onDelete, onToggleVisible }) {
   if (!row) return null
   if (!row.dirExists) {
     return [
@@ -871,7 +816,6 @@ function DrillInView({ row, searchText, sortBy, t, onSearch, onSort, onBack, onO
   }
   let skills = row.skills
   if (searchText) skills = skills.filter(s => matchSkill(s, searchText.toLowerCase()))
-  skills = sortSkills(skills, sortBy)
   return [
     h('div', { className: 'sk-head' },
       h(P.Button, { variant: 'ghost', size: 'sm', onClick: onBack }, t('backAll')),
@@ -879,12 +823,11 @@ function DrillInView({ row, searchText, sortBy, t, onSearch, onSort, onBack, onO
       h('span', { className: 'sk-tag' }, `${skills.length} ${t('skillsSuffix')}`),
       row.readOnly && h(Tag, { tone: 'danger' }, t('readOnlyTag')),
       h(InputBox, { value: searchText, placeholder: t('filterWithin', { label: row.label }), onSearch }),
-      SortSelect({ value: sortBy, onChange: onSort, t }),
       h('span', { className: 'spacer' }),
       h('span', { className: 'sk-dir' }, row.dir)),
     !skills.length
       ? h(Empty, null, searchText ? t('emptySearch') : t('emptySkillsIn', { label: row.label }))
-      : h(PagedGrid, { key: 'ed' + row.key + searchText + sortBy, items: skills, t,
+      : h(PagedGrid, { key: 'ed' + row.key + searchText, items: skills, t,
           render: s => h(SkillCard, { key: s.name, row, s, t, onOpen, onInstall, onDelete, onToggleVisible }) }),
   ]
 }
@@ -911,7 +854,6 @@ function SkillsPage({ t, onClose, embedded }) {
   const [searchExec, setSearchExec] = useState('')
   const [searchDrill, setSearchDrill] = useState('')
   const [searchAll, setSearchAll] = useState('')
-  const [sortBy, setSortBy] = useState('default')
   const [sel, setSel] = useState(null)
   const rootRef = useRef(null)
 
@@ -972,8 +914,8 @@ function SkillsPage({ t, onClose, embedded }) {
   let body = null
   try {
     if (filterExecutor !== 'all') {
-      body = h(DrillInView, { row, searchText: searchDrill, sortBy, t,
-        onSearch: setSearchDrill, onSort: setSortBy,
+      body = h(DrillInView, { row, searchText: searchDrill, t,
+        onSearch: setSearchDrill,
         onBack: () => { setFilterExecutor('all'); setSearchDrill('') },
         onOpen: s => openDetail(s, row?.key),
         onInstall: (r, name) => setPendingInstall({ row: r, name }),
@@ -985,8 +927,8 @@ function SkillsPage({ t, onClose, embedded }) {
             .catch(() => {})
         } })
     } else if (executorView === 'all') {
-      body = h(AllSkillsView, { executors, searchText: searchAll, sourceFilter, sortBy, t,
-        onSearch: setSearchAll, onSort: setSortBy,
+      body = h(AllSkillsView, { executors, searchText: searchAll, sourceFilter, t,
+        onSearch: setSearchAll,
         onFilter: v => { setSourceFilter(v); if (v !== 'all') { setFilterExecutor(v); setSearchAll(''); setSearchExec('') } },
         onBack: () => setExecutorView('cards'),
         onOpen: s => { const owner = executors.find(x => x.dirExists && Array.isArray(x.skills) && x.skills.some(k => k.name === s.name)); openDetail(s, owner ? owner.key : sourceFilter !== 'all' ? sourceFilter : 'dsh') },
@@ -1049,10 +991,6 @@ function SkillsPage({ t, onClose, embedded }) {
       where: pendingDelete.executor === 'dsh' || !pendingDelete.executor ? t('whereDsh') : ((executors.find(x => x.key === pendingDelete.executor) || {}).label || pendingDelete.executor),
     }))))
   }
-
-function selectStyle() {
-  return { minHeight: 30, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-specific-input-major, var(--dsw-alias-bg-layer-1))', color: 'var(--dsw-alias-label-primary)', padding: '4px 10px' }
-}
 
 async function quickDelete(t, executor, name, done) {
   try {
@@ -1221,7 +1159,7 @@ const CLIENT_NAME = 'dexter-skills-mcp-manager'
 module.exports = {
   name: CLIENT_NAME,
   inject: ['slots', 'locale'],
-  __internals: { NS, ZH, EN, matchSkill, formatSize, formatTime, usageText, sortSkills },
+  __internals: { NS, ZH, EN, matchSkill, formatSize, formatTime },
   /** Test/host helper: mount a standalone page into any container. */
   __boot(container, opts = {}) {
     ensureStyles()
