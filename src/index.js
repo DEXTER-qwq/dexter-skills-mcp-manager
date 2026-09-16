@@ -5,11 +5,11 @@
  *
  * FROKED / HARDENED: the upstream package shipped two remote-touching features
  * that this fork removes outright (see README "改造说明"):
- * - the ntd "market" (git clone/fetch of an external skill repo, access token
- *   handling, daily auto-sync) — gone;
- * - "share to the official repo" and its `share/run` endpoint, which spawned a
- *   `dsh` process with a prompt telling the model to read the stored token and
- *   push to GitCode — gone.
+ * - the ntd "market": cloning/fetching an external skill repository, storing an
+ *   access token and auto-syncing it on a timer — gone;
+ * - "share to the official repo" plus its run endpoint, which executed a model
+ *   prompt (telling it to read the stored token and push upstream) through a
+ *   spawned `dsh` process — gone.
  *
  * What is left is a purely local surface: every coding agent's on-machine
  * skills directory (`~/.claude/skills`, `~/.agents/skills`, …) is scanned for
@@ -798,8 +798,8 @@ module.exports = {
           }
 
           // POST /skills-management/api/install {name, from, overwrite?}
-          // `from` is the source executor key — mandatory now that the market
-          // universe is gone (there is nothing else to install from).
+          // `from` is the source executor key — mandatory now that the remote
+          // catalogue is gone (there is nothing else to install from).
           if (req.method === 'POST' && apiPath.endsWith('/skills-management/api/install')) {
             const body = await readJsonBody(req)
             if (typeof body.name !== 'string' || body.name === '') { sendJson(res, 400, { error: 'body must provide name' }); return }

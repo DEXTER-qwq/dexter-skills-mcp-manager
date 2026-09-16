@@ -39,12 +39,20 @@ test('no hardcoded colors in the client source — ui-theme tokens only', () => 
 
 test('the remote surfaces stay deleted — no market/share client code or copy', () => {
   const src = readFileSync(new URL('../client/index.js', import.meta.url), 'utf8')
-  for (const banned of ['PluginKit', 'SHARE_PROMPT_ZH', '/market/', '/share/run', 'gitcode.com', 'api.gitcode', 'ActionShareDialog']) {
+  for (const banned of ['PluginKit', 'SHARE_PROMPT_ZH', 'api/market/', 'api/share/', 'gitcode.com', 'api.gitcode', 'ActionShareDialog']) {
     assert.ok(!src.includes(banned), `client source must not reference ${banned}`)
   }
   // 注意：/share/i 不能裸用——sortCharsDesc 之外无影响，但 /token/i 会误伤 sortTokens*
   const bannedKeys = Object.keys(ZH).filter(k => /(market|share|sync|repo|branch|prompt|secret)/i.test(k))
   assert.deepEqual(bannedKeys, [], 'market/share locale keys must not come back')
+})
+
+test('client/bundle.js is a fresh build of client/index.js', () => {
+  const src = readFileSync(new URL('../client/index.js', import.meta.url), 'utf8')
+  const bundle = readFileSync(new URL('../client/bundle.js', import.meta.url), 'utf8')
+  // build-client.mjs wraps the source verbatim under a uniform 4-space indent
+  const wrapped = src.split('\n').map(line => (line.length === 0 ? line : '    ' + line)).join('\n')
+  assert.ok(bundle.includes(wrapped), 'client/bundle.js is stale — run `npm run build:client`')
 })
 
 test('matchSkill covers name/description/keywords case-insensitively', () => {

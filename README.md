@@ -78,11 +78,14 @@ dsh plugin --profile web add <本目录绝对路径> -w
 ```bash
 npm install                # yaml + js-tiktoken（devDeps: @deepseek-ai/schemastery）
 npm run check              # 语法检查
-npm test                   # node --test（宿主面 28 + 客户端面 12）
+npm test                   # node --test（宿主面 28 + 客户端面 13）
 npm run build:client       # 由 client/index.js 生成 client/bundle.js
 ```
 
-`client/bundle.js` 是构建产物，改完 `client/index.js` 必须重新 `build:client`。
+> `npm test`（即 `node --test`）通过子进程跑测试文件；在受限沙箱里子进程 `stdio` 管道会被拒（`spawn EPERM`）。此时改为直接执行测试文件即可：
+> `node test/skills.test.mjs && node test/ui.test.mjs`。
+
+`client/bundle.js` 是构建产物，改完 `client/index.js` 必须重新 `build:client`（`test/ui.test.mjs` 有一条「bundle 是否为最新构建」的断言守着）。
 
 当前依赖已按 `package-lock.json` 锁定；卸载/重装请使用 `npm ci`。
 

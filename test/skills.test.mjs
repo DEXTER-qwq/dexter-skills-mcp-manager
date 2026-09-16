@@ -79,6 +79,7 @@ test('host source touches no child process and no network', async () => {
   for (const banned of [
     "require('node:child_process')", 'execFile', 'spawn(', 'createShareRunJob', 'dsh-plugin-kit',
     "require('node:https')", "require('node:http')", 'gitcode.com', 'api.gitcode', 'authedUrl', 'gitSyncRepo',
+    'api/market/', 'api/share/',
   ]) {
     assert.ok(!src.includes(banned), `host source must not reference ${banned}`)
   }
