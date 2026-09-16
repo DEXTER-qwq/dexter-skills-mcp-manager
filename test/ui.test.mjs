@@ -10,7 +10,7 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const plugin = require('../client/index.js')
-const { NS, ZH, EN, matchSkill, formatSize, insertComposerText, fetchSkillCandidates } = plugin.__internals
+const { NS, ZH, EN, matchSkill, formatSize } = plugin.__internals
 
 test('client module declares slots + locale injects', () => {
   assert.equal(plugin.name, 'dexter-skills-mcp-manager') // must equal the boot manifest id
@@ -167,14 +167,15 @@ test('apply registers dictionaries and both slot entries', async () => {
   }
   plugin.apply(ctx)
   assert.deepEqual(calls.map(c => [c[0], c[1]]).sort(), [[NS, 'en'], [NS, 'zh']])
-  // three entries: two settings sections (skills + MCP, siblings) + the composer button
-  assert.equal(registered.length, 3)
+  // two entries: the two settings sections (skills + MCP, siblings). The composer
+  // 「＋技能」 button was removed, so nothing registers in the conversation slot.
+  assert.equal(registered.length, 2)
   const names = registered.map(r => r.name).sort()
-  assert.deepEqual(names, ['conversation.input.left', 'settings.section', 'settings.section'])
+  assert.deepEqual(names, ['settings.section', 'settings.section'])
   for (const spec of registered) {
     assert.equal(typeof spec.inject, 'function')
-    if (spec.name === 'settings.section') assert.equal(typeof spec.label, 'function')
-    else assert.equal(spec.id, plugin.name)
+    assert.equal(spec.name, 'settings.section')
+    assert.equal(typeof spec.label, 'function')
   }
   // the two settings sections are distinct entries with distinct ids
   const sections = registered.filter(r => r.name === 'settings.section')
@@ -182,73 +183,18 @@ test('apply registers dictionaries and both slot entries', async () => {
   assert.deepEqual(sections.map(s => typeof s.label()), ['string', 'string'])
   assert.notEqual(sections[0].label(), sections[1].label(), 'the two sidebar entries must not share a label')
   assert.ok(sections[1].order > sections[0].order, 'MCP sits right after skills')
-  // ＋技能按钮槽位：打开自带搜索的 picker 浮层
-  const composer = registered.find(r => r.name === 'conversation.input.left')
-  assert.equal(typeof composer, 'object')
-  assert.equal(composer.id, plugin.name)
 })
 
-test('insertComposerText bails slash/input-insert-text with an end-of-draft span', () => {
-  const calls = []
-  const scope = { sessions: { scope: (id) => ({ id, bail(...args) { calls.push(args); return true } }) } }
-  const ok = insertComposerText(scope, 's1', { draft: 'ab', draftRev: 5 }, '/lint ')
-  assert.equal(ok, true)
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0][1], 'slash/input-insert-text')
-  assert.deepEqual(calls[0][2], { text: '/lint ', span: { start: 2, end: 2, draftRev: 5 } })
-  // bail 未被认领 / 服务缺席 / scope 抛错 → false，无副作用
-  assert.equal(insertComposerText({ sessions: { scope: () => ({ bail: () => undefined }) } }, 's', {}, '/x '), false)
-  assert.equal(insertComposerText(null, 's', {}, '/x '), false)
-  assert.equal(insertComposerText({ sessions: { scope: () => { throw new Error('x') } } }, 's', {}, '/x '), false)
-  assert.equal(insertComposerText({ sessions: { scope: () => null } }, 's', {}, '/x '), false)
-})
-
-test('fetchSkillCandidates maps the host registry and guards absent services', async () => {
-  // 子代理会话：ui-skill 同款守卫，直接空目录
-  const subagentSessions = { subagentAddress: () => 'subagent://x' }
-  assert.deepEqual(await fetchSkillCandidates(null, subagentSessions, 's-sub'), [])
-  // connection 缺席 / api 缺失 → reject（picker 落入空态）
-  await assert.rejects(() => fetchSkillCandidates(null, {}, 's-1'))
-  await assert.rejects(() => fetchSkillCandidates({ api: {} }, {}, 's-1'))
-  // result.ok=false → reject
-  const badConn = { api: { skills: { list: async () => ({ result: { ok: false } }) } } }
-  await assert.rejects(() => fetchSkillCandidates(badConn, {}, 's-bad'))
-  // 正常映射 + 60s 内同会话走缓存（list 只调一次）
-  let calls = 0
-  const conn = { api: { skills: { list: async ({ sessionId }) => { calls += 1; return { result: { ok: true, value: { skills: [
-    { name: 'lint', description: '检查', modelInvocable: true },
-    { name: 'deploy', description: '', modelInvocable: false },
-  ] } } } } } } }
-  const sid = `s-${Date.now()}`
-  const rows = await fetchSkillCandidates(conn, {}, sid)
-  assert.deepEqual(rows, [
-    { name: 'lint', description: '检查', modelInvocable: true },
-    { name: 'deploy', description: '', modelInvocable: false },
-  ])
-  const again = await fetchSkillCandidates(conn, {}, sid)
-  assert.equal(again, rows)
-  assert.equal(calls, 1)
-})
-
-test('openTriggerSource toggles via sessionOf with a synthetic end-of-draft span', () => {
-  const { openTriggerSource } = plugin.__internals
-  const calls = []
-  const scope = {
-    sessions: { scope: (id) => ({ id }) },
-    inputTriggers: {
-      sessionOf: (actx) => ({
-        toggleSource: (name, hit) => calls.push({ name, hit, actx }),
-      }),
-    },
-  }
-  const ok = openTriggerSource(scope, 'session-9', { draft: '', draftRev: 3 }, 'skill')
-  assert.equal(ok, true)
-  assert.equal(calls[0].name, 'skill')
-  assert.equal(calls[0].hit.position, 'leading')
-  assert.deepEqual(calls[0].hit.span, { start: 0, end: 0, draftRev: 3 })
-  // 服务缺席 / scope 不可解析 → false（按钮点击无副作用）
-  assert.equal(openTriggerSource(null, 's', {}, 'skill'), false)
-  assert.equal(openTriggerSource({ sessions: { scope: () => undefined }, inputTriggers: { sessionOf: () => ({}) } }, 's', {}, 'skill'), false)
+test('the composer button stays removed — no picker surface or conversation slot', () => {
+  const src = readFileSync(new URL('../client/index.js', import.meta.url), 'utf8')
+  const banned = ['conversation.input.left', 'SkillPicker', 'ComposerButtonSlot', 'inputTriggers', 'sk-picker', 'insertComposerText', 'fetchSkillCandidates', 'openTriggerSource']
+  const found = banned.filter((needle) => src.includes(needle))
+  assert.deepEqual(found, [], `client source must not reference ${found.join(', ')}`)
+  // and no locale copy survives for it (`pickSource` is the skills page's own
+  // source filter, so the check names the removed keys instead of a prefix)
+  const removedKeys = ['pickSkill', 'pickSkillTitle', 'pickerSearch', 'pickerLoading', 'pickerUserOnly']
+  const leftovers = removedKeys.filter((key) => ZH[key] !== undefined || EN[key] !== undefined)
+  assert.deepEqual(leftovers, [], `stale picker locale keys: ${leftovers.join(', ')}`)
 })
 
 // ── 注入开销文案与排序（纯 helper）────────────────────────────────────────
