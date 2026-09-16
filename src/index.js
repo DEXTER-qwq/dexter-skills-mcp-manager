@@ -832,11 +832,28 @@ module.exports = {
       }
     }
 
+    /**
+     * Re-read the plugin-owned state file.
+     *
+     * The store otherwise keeps what it read at startup, so a state file that
+     * appears or changes while dsh is running (renamed back, restored from a
+     * backup, edited by hand) would be invisible — and the page would claim
+     * "no servers" for a file that plainly has them. Every read and every
+     * mutation goes through here first.
+     */
+    const refreshMcpState = () => {
+      // no defensive typeof here on purpose: the reload that made this work was
+      // once silently missing from the store's exports, and a guard turned that
+      // bug into "the page just doesn't see your file". Fail loudly instead.
+      mcpStore.reload()
+      return mcpStore.get()
+    }
+
     const mcpSnapshot = () => {
       const toolsService = serviceOf('tools')
       const schemas = toolsService !== undefined && typeof toolsService.schemas === 'function' ? toolsService.schemas() : []
       const loader = serviceOf('loader')
-      const state = mcpStore.get()
+      const state = refreshMcpState()
       const stateStatus = typeof mcpStore.status === 'function' ? mcpStore.status() : { status: 'ok' }
       const local = mcpManager.readLocalConfig()
       return {
@@ -846,6 +863,9 @@ module.exports = {
         localStatus: local.status,
         localError: local.error,
         localInvalid: local.invalid,
+        // how many state entries the hand-written file supersedes (drives the
+        // "clean up duplicates" button)
+        duplicateCount: mcpManager.pruneShadowedStateServers(state, local).removed.length,
         // 'corrupt' means the list below is NOT the whole truth — the page must say so
         stateStatus: stateStatus.status,
         stateError: stateStatus.error,
@@ -1323,7 +1343,7 @@ module.exports = {
             const imported = []
             const skipped = []
             await withMcpLock(async () => {
-              const state = mcpStore.get()
+              const state = refreshMcpState()
               const servers = [...(state.servers ?? [])]
               for (const candidate of picked) {
                 const server = { ...candidate.config, enabled: candidate.enabled !== false }
@@ -1361,6 +1381,31 @@ module.exports = {
             return
           }
 
+          // ── MCP：清掉本插件状态里被手写文件覆盖的声明 ─────────────────
+          // 移进 mcp.local.jsonc 之后，mcp.json 里那份就成了重复声明（列表上
+          // 表现为「有同名声明」）。这个操作把它们从状态里删掉，让页面恢复干净；
+          // 手写文件不受影响，仍然生效。
+          if (apiPath === '/skills-management/api/mcp/prune') {
+            if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return }
+            const removed = await withMcpLock(async () => {
+              const state = refreshMcpState()
+              const local = mcpManager.readLocalConfig()
+              const { servers, removed: names } = mcpManager.pruneShadowedStateServers(state, local)
+              if (names.length === 0) return []
+              const keep = new Set(servers.map((server) => server.serverName))
+              await mcpStore.replace({
+                ...state,
+                servers,
+                disabled: disabledServerNames().filter((name) => keep.has(name) || !names.includes(name)),
+              })
+              for (const name of names) await unmountMcpServer(name)
+              return names
+            })
+            applyMcpRestrictionsToAll()
+            sendJson(res, 200, { removed, ...mcpSnapshot() })
+            return
+          }
+
           // ── MCP 管理：/skills-management/api/mcp ──────────────────────
           // 全部基于 loader + 本插件状态文件：不解析、不改写任何 dsh 配置。
           if (apiPath === '/skills-management/api/mcp') {
@@ -1387,30 +1432,32 @@ module.exports = {
               const serverName = body.serverName
               const row = mcpSnapshot().servers.find((server) => server.serverName === serverName)
               if (row === undefined) { sendJson(res, 404, { error: `MCP server '${serverName}' is not known` }); return }
-              // a hand-written row's own `enabled` is the truth, and that file is
-              // not ours to write — a toggle here would only create a lie in our state
-              if (row.source === 'local') {
-                sendJson(res, 409, {
-                  error: `MCP server '${serverName}' comes from the hand-written config file; set its "enabled" there and restart`,
-                })
-                return
-              }
-              const result = await withMcpLock(async () => {
-                const state = mcpStore.get()
+              // A hand-written row is toggled exactly like a composed one — the
+              // state file's `disabled` list suppresses it, and the local file
+              // (which this plugin never writes) is left untouched.
+              await withMcpLock(async () => {
+                const state = refreshMcpState()
                 const disabled = new Set(disabledServerNames())
                 if (body.enabled) disabled.delete(serverName)
                 else disabled.add(serverName)
+                const ownsRow = (state.servers ?? []).some((server) => server.serverName === serverName)
                 const servers = (state.servers ?? []).map((server) => (
                   server.serverName === serverName ? { ...server, enabled: body.enabled } : server))
                 await mcpStore.replace({ ...state, disabled: [...disabled], servers })
-                // 用户新增的 server 还要真的挂上/摘下来
-                const userServer = servers.find((server) => server.serverName === serverName)
-                if (userServer !== undefined && state.servers?.some((s) => s.serverName === serverName)) {
+                // a row we own must also be mounted/unmounted for real; a local
+                // row is mounted by syncUserMcpMounts below, from the same flag
+                if (ownsRow) {
+                  const userServer = servers.find((server) => server.serverName === serverName)
                   if (body.enabled) await mountMcpServer(userServer)
                   else await unmountMcpServer(serverName)
+                } else if (body.enabled) {
+                  const wanted = mcpManager.mountableServers(state, mcpManager.readLocalConfig())
+                    .find((server) => server.serverName === serverName)
+                  if (wanted !== undefined) await mountMcpServer(wanted)
+                } else {
+                  await unmountMcpServer(serverName)
                 }
               })
-              void result
               applyMcpRestrictionsToAll()
               sendJson(res, 200, mcpSnapshot())
               return
@@ -1421,7 +1468,7 @@ module.exports = {
               const body = await readJsonBody(req)
               const input = mcpManager.validateServerInput(body)
               const created = await withMcpLock(async () => {
-                const state = mcpStore.get()
+                const state = refreshMcpState()
                 if ((state.servers ?? []).some((server) => server.serverName === input.serverName)) {
                   const error = new Error(`MCP server '${input.serverName}' is already managed`)
                   error.status = 409
@@ -1450,7 +1497,7 @@ module.exports = {
               : (typeof body.id === 'string' ? body.id : '')
             if (serverName === '') { sendJson(res, 400, { error: 'body must provide serverName' }); return }
             await withMcpLock(async () => {
-              const state = mcpStore.get()
+              const state = refreshMcpState()
               const owned = (state.servers ?? []).some((server) => server.serverName === serverName)
               if (!owned) {
                 const owner = ownerOfServer(serverName)

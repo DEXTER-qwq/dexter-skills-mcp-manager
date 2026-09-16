@@ -157,6 +157,28 @@ test('parseJsonc reports what it cannot fix instead of guessing', () => {
 
 // ── the plugin-owned state file ─────────────────────────────────────────
 
+test('the store reloads from disk, so a file that appears later is seen', async () => {
+  await withHome(async (home) => {
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    store.loadSync()
+    assert.equal(store.status().status, 'missing')
+    assert.deepEqual(store.get().servers, [])
+
+    // the user renames mcp.json.bak back while dsh is running
+    const dir = join(home, 'skills-management')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'mcp.json'), JSON.stringify({
+      version: 1, disabled: [], servers: [{ serverName: 'late', transport: 'stdio', command: 'c' }],
+    }))
+    assert.equal(store.reload().changed, true)
+    assert.deepEqual(store.get().servers.map((s) => s.serverName), ['late'])
+    assert.equal(store.status().status, 'ok')
+
+    // a no-op reload reports no change
+    assert.equal(store.reload().changed, false)
+  })
+})
+
 test('missing and empty are distinct statuses', async () => {
   await withHome(async () => {
     const missing = mcpManager.createStore({ logger: { warn() {}, error() {} } })
@@ -224,21 +246,6 @@ test('two writes in the same millisecond must not share a temp path', async () =
     assert.deepEqual(state.servers.map((s) => s.serverName), ['two'], 'the last write wins, and it is valid JSON')
     const entries = await (await import('node:fs/promises')).readdir(join(home, 'skills-management'))
     assert.deepEqual(entries, ['mcp.json'])
-  })
-})
-
-test('missing and empty are distinct statuses', async () => {
-  await withHome(async (home) => {
-    const missing = mcpManager.createStore({ logger: { warn() {}, error() {} } })
-    missing.loadSync()
-    assert.equal(missing.status().status, 'missing')
-
-    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
-    store.loadSync()
-    await store.replace({ version: 1, disabled: [], servers: [] })
-    const reopened = mcpManager.createStore({ logger: { warn() {}, error() {} } })
-    reopened.loadSync()
-    assert.equal(reopened.status().status, 'empty')
   })
 })
 
@@ -834,13 +841,29 @@ test('the hand-written local file is mounted at startup and shown read-only', as
     // both local servers were mounted under our own prefix
     assert.deepEqual(created.map((c) => c.id).sort(), ['sm-mcp-clash', 'sm-mcp-jads'])
 
-    // toggling a local row is refused: that file is not ours to change
+    // toggling a local row works, and lands in OUR state — the local file is
+    // never written, so its bytes must be identical afterwards
     const toggled = await call('PUT', '/skills-management/api/mcp', { serverName: 'jads', enabled: false })
-    assert.equal(toggled.status, 409)
-    assert.match(toggled.payload.error, /hand-written config file/)
-
-    // and the annotations are byte-for-byte intact after all of that
+    assert.equal(toggled.status, 200)
+    assert.equal(toggled.payload.servers.find((s) => s.serverName === 'jads').enabled, false)
+    const state = JSON.parse(await readFile(join(dir, 'mcp.json'), 'utf8'))
+    assert.deepEqual(state.disabled, ['jads'])
     assert.equal(await readFile(join(dir, 'mcp.local.jsonc'), 'utf8'), localText)
+
+    const back = await call('PUT', '/skills-management/api/mcp', { serverName: 'jads', enabled: true })
+    assert.equal(back.payload.servers.find((s) => s.serverName === 'jads').enabled, true)
+
+    // the duplicate declaration left in our own state can be cleaned up in one action
+    assert.equal(got.payload.duplicateCount, 1)
+    const pruned = await call('POST', '/skills-management/api/mcp/prune')
+    assert.equal(pruned.status, 200)
+    assert.deepEqual(pruned.payload.removed, ['clash'])
+    assert.equal(pruned.payload.duplicateCount, 0)
+    assert.deepEqual(pruned.payload.servers.map((s) => s.serverName), ['clash', 'jads'])
+    assert.ok(pruned.payload.servers.every((s) => s.source === 'local'))
+    // the hand-written file is still untouched, and still the live definition
+    assert.equal(await readFile(join(dir, 'mcp.local.jsonc'), 'utf8'), localText)
+    assert.equal(pruned.payload.servers.find((s) => s.serverName === 'clash').command, 'from-local')
   })
 })
 

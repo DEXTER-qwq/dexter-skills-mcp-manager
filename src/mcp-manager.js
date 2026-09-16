@@ -337,7 +337,25 @@ function createStore({ logger = console } = {}) {
     return writeChain
   }
 
-  return { load, loadSync, get, status, replace, file: stateFile(), dir: stateDir() }
+  /**
+   * Re-read from disk and report whether anything actually changed.
+   *
+   * The state file is a normal file: it can be renamed, restored from a backup
+   * or written by hand while dsh is running. Without this the store would keep
+   * whatever it read at startup and the page would report "nothing configured"
+   * for a file that plainly has servers.
+   */
+  function reload() {
+    const previous = state
+    loadSync()
+    return {
+      changed: JSON.stringify(previous) !== JSON.stringify(state),
+      previous,
+      next: state,
+    }
+  }
+
+  return { load, loadSync, reload, get, status, replace, file: stateFile(), dir: stateDir() }
 }
 
 // ── validation ──────────────────────────────────────────────────────────
@@ -711,7 +729,10 @@ function listServers(loader, state, schemas, local) {
       serverName: server.serverName,
       source: 'local',
       transport: server.transport,
-      enabled: server.enabled !== false,
+      // the file's own `enabled` is the default; the state file's `disabled`
+      // list is the runtime override, exactly as it is for composed rows — this
+      // page never writes the local file, so a toggle lands there
+      enabled: server.enabled !== false && !disabled.has(server.serverName),
       live: own !== undefined && own.live,
       toolCount: toolsOfServer(schemas, server.serverName).length,
       command: server.command,
@@ -776,19 +797,41 @@ function listServers(loader, state, schemas, local) {
  * precedence order as {@link listServers}: composed rows already exist in the
  * loader, so only local and user rows are returned here — with `source` so the
  * caller knows which ones it owns and may unmount.
+ *
+ * `disabled` (the state file's runtime override) is honoured for local rows too,
+ * which is what makes a hand-written server toggleable from the page.
  */
 function mountableServers(state, local) {
   const out = []
   const seen = new Set()
+  const disabled = new Set(Array.isArray(state?.disabled) ? state.disabled : [])
   for (const [source, list] of [['local', local?.servers], ['user', state?.servers]]) {
     for (const server of Array.isArray(list) ? list : []) {
       if (server.enabled === false) continue
+      if (disabled.has(server.serverName)) continue
       if (seen.has(server.serverName)) continue
       seen.add(server.serverName)
       out.push({ ...server, source })
     }
   }
   return out
+}
+
+/**
+ * Servers this plugin's own state declares that the hand-written file also
+ * declares. The local file wins, so these state entries are dead weight — and
+ * they are what makes the page show a duplicate-name notice. Dropping them is
+ * the fix the user actually wants when they move a server into the local file.
+ *
+ * @returns `{ servers, removed }` — the surviving state servers and the names dropped.
+ */
+function pruneShadowedStateServers(state, local) {
+  const localNames = new Set((local?.servers ?? []).map((server) => server.serverName))
+  const servers = (state?.servers ?? []).filter((server) => !localNames.has(server.serverName))
+  const removed = (state?.servers ?? [])
+    .filter((server) => localNames.has(server.serverName))
+    .map((server) => server.serverName)
+  return { servers, removed }
 }
 
 /**
@@ -908,6 +951,7 @@ module.exports = {
   denyNamesForDisabled,
   listServers,
   mountableServers,
+  pruneShadowedStateServers,
   publicServer,
   __internals: { emptyState, isPlainObject, envRefName },
 }

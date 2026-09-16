@@ -243,9 +243,12 @@ const ZH = {
   mcpLocalCorrupt: '手写配置无法解析：{error}',
   mcpLocalInvalid: '手写配置里有 {n} 条不合法，已被跳过',
   mcpSourceLocal: '手写配置',
-  mcpLocalRowHint: '这条来自手写配置文件，本页不修改它 —— 要改就编辑那个文件再重启。',
+  mcpLocalRowHint: '这条来自手写配置文件。开关本页照样能用（记在本插件状态里，不改你的文件）；要改命令/参数就编辑那个文件再重启。',
   mcpShadowedTag: '有同名声明',
   mcpShadowedHint: '这个名字在别处也声明了。为保证不冲突，只会挂载上面这条；别处那份被忽略。删掉多余的那份可消除此提示。',
+  mcpDuplicateNotice: '本插件状态里有 {n} 条已被手写配置覆盖',
+  mcpPrune: '清掉重复声明',
+  mcpPruneDone: '已清掉 {n} 条重复声明（手写配置未改动）',
   mcpStateRepaired: '状态文件里少了个逗号，已自动修好；原始内容备份在 {backup}',
   mcpStateCorrupt: '状态文件无法解析：{error} —— 下面的列表不完整。修好或删掉该文件后点「刷新」。',
   mcpImportOnlyTaken: '可以导入，但同名 server 仍被那个插件挂着 —— 先在插件列表里停用它，点上面的「刷新」，再回来导入。',
@@ -405,9 +408,12 @@ const EN = {
   mcpLocalMissing: '{file} does not exist yet — create it if you want a config you can annotate.',
   mcpLocalCorrupt: 'The hand-written config cannot be parsed: {error}',
   mcpLocalInvalid: '{n} entries in the hand-written config are invalid and were skipped',
-  mcpLocalRowHint: 'This row comes from the hand-written config, which this page never modifies — edit that file and restart instead.',
+  mcpLocalRowHint: 'This row comes from the hand-written config. The toggle here still works (it is recorded in this plugin’s state, not in your file); edit the file and restart to change the command or arguments.',
   mcpShadowedTag: 'duplicate name',
   mcpShadowedHint: 'This name is declared somewhere else too. Only the row above is mounted, because a duplicate serverName would break the MCP client; the other declaration is ignored.',
+  mcpDuplicateNotice: '{n} entries in this plugin’s state are overridden by the hand-written config',
+  mcpPrune: 'Drop the duplicates',
+  mcpPruneDone: 'Dropped {n} duplicate declarations (the hand-written config was not touched)',
   mcpForeignHint: 'Another plugin mounted this row at runtime, so this page leaves it alone. When that plugin is disabled it removes its own entry and the server disappears with it — to take ownership here: disable that plugin first, then use “Import from another plugin”.',
   mcpImport: 'Import from another plugin',
   mcpImportTitle: 'Import MCP servers',
@@ -1537,7 +1543,7 @@ function McpServerCard({ t, row, onEdit, onToggle, onDelete, busy, canEdit }) {
     h('div', { className: 'sk-foot' },
       h('div', { className: 'sk-chips' }, h('span', { className: 'sk-dir' }, row.entryId)),
       h('div', { className: 'sk-rowbtns' },
-        row.source !== 'local' && h(ButtonLite, { small: true, disabled: busy,
+        h(ButtonLite, { small: true, disabled: busy,
           onClick: () => onToggle(row) }, row.enabled === false ? t('mcpEnable') : t('mcpDisable')),
         canEdit && removable && h(ButtonLite, { small: true, disabled: busy,
           onClick: () => onEdit(row) }, t('mcpEdit')),
@@ -1665,6 +1671,15 @@ function McpPane({ t, onToast }) {
     })
     if (payload !== null) onToast(t('mcpDeleted'))
   }
+  const doPrune = async () => {
+    const payload = await act({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    void payload
+    onToast(t('mcpPruneDone', { n: (payload && payload.removed ? payload.removed.length : 0) }))
+  }
   const openImport = async () => {
     setBusy(true)
     try {
@@ -1708,6 +1723,9 @@ function McpPane({ t, onToast }) {
       t('mcpLocalCorrupt', { error: data.localError || '?' })),
     (data.localInvalid || []).length > 0 && h('div', { className: 'sk-tag danger', style: { alignSelf: 'flex-start' } },
       t('mcpLocalInvalid', { n: data.localInvalid.length })),
+    (data.duplicateCount || 0) > 0 && h('div', { className: 'sk-toolbar' },
+      h('span', { className: 'sk-tag danger' }, t('mcpDuplicateNotice', { n: data.duplicateCount })),
+      h(ButtonLite, { small: true, disabled: busy, onClick: doPrune }, t('mcpPrune'))),
     data.stateStatus === 'repaired' && h('div', { className: 'sk-tag', style: { alignSelf: 'flex-start' } },
       t('mcpStateRepaired', { backup: data.stateBackup || '-' })),
     data.stateStatus === 'corrupt' && h('div', { className: 'sk-tag danger', style: { alignSelf: 'flex-start', whiteSpace: 'pre-wrap' } },
