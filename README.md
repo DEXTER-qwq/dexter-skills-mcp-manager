@@ -107,8 +107,6 @@ npm run build:client   # 由 client/index.js 生成 client/bundle.js
 > 受限沙箱里 `npm test`（即 `node --test`）会因为子进程 stdio 管道被拒而失败（`spawn EPERM`），这时直接跑测试文件即可：
 > `node test/skills.test.mjs && node test/mcp-manager.test.mjs && node test/ui.test.mjs`
 
-仓库里还有一份可交互说明页 [`docs/overview.html`](docs/overview.html)：功能清单、工作原理、接口、测试守卫。纯静态、离线，浏览器直接打开。
-
 ## 来源与许可
 
 MIT。改造自 [`@weibaohui/skills-management`](https://github.com/weibaohui/skills-management)：去掉了它的技能市场同步与「分享到官方仓库」两条联网 / 起子进程的功能链，并把 MCP 面板改成以手写配置为主。本包 `private: true`，不发布到任何 registry。
