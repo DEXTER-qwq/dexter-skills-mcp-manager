@@ -10,7 +10,8 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const plugin = require('../client/index.js')
-const { NS, ZH, EN, matchSkill, formatSize, insertComposerText, fetchSkillCandidates } = plugin.__internals
+const { NS, ZH, EN, matchSkill, formatSize, insertComposerText, fetchSkillCandidates,
+  mapToText, textToMap, textToArgs, mcpRowToForm, emptyMcpForm } = plugin.__internals
 
 test('client module declares slots + locale injects', () => {
   assert.equal(plugin.name, '@weibaohui/skills-management') // must equal the boot manifest id
@@ -61,6 +62,75 @@ test('matchSkill covers name/description/keywords case-insensitively', () => {
   assert.ok(matchSkill(skill, '表格'))
   assert.ok(matchSkill(skill, 'feishu'))
   assert.equal(matchSkill(skill, 'codex'), false)
+})
+
+// ── MCP pane helpers ────────────────────────────────────────────────────
+
+const enT = (key, vars) => {
+  let out = EN[key] ?? key
+  if (vars) for (const [k, v] of Object.entries(vars)) out = out.split('{' + k + '}').join(String(v))
+  return out
+}
+
+test('mapToText / textToMap round-trip env and headers', () => {
+  assert.equal(mapToText({ A: 'v', B: { js: 'process.env.HOME' } }), 'A=v\nB=${HOME}')
+  assert.equal(mapToText({}), '')
+  assert.equal(mapToText(undefined), '')
+  const parsed = textToMap('A=v\nB=${HOME}\n# comment\n\nC=has=equals', enT)
+  assert.deepEqual(parsed.value, { A: 'v', B: { js: 'process.env.HOME' }, C: 'has=equals' })
+  assert.equal(textToMap('A=v', enT).error, undefined)
+})
+
+test('textToMap rejects malformed lines instead of guessing', () => {
+  for (const bad of ['novalue', '=v', '1BAD=v', 'A v']) {
+    assert.ok(textToMap(bad, enT).error !== undefined, `expected an error for ${JSON.stringify(bad)}`)
+  }
+})
+
+test('textToArgs is one argument per line, blanks dropped', () => {
+  assert.deepEqual(textToArgs('-y\n@scope/pkg\n\n  spaced arg  '), ['-y', '@scope/pkg', 'spaced arg'])
+  assert.deepEqual(textToArgs(''), [])
+  assert.deepEqual(textToArgs(undefined), [])
+})
+
+test('mcpRowToForm / emptyMcpForm keep the dialog fields consistent', () => {
+  const form = mcpRowToForm({
+    serverName: 'gh', transport: 'stdio', command: 'npx', args: ['-y', 'pkg'],
+    env: { T: { js: 'process.env.T' } }, cwd: 'C:/x', url: '', headers: {},
+    toolCallTimeoutMs: 1234, failOnStartupError: true, reconnect: { enabled: false, maxAttempts: 4 },
+  })
+  assert.equal(form.serverName, 'gh')
+  assert.equal(form.argsText, '-y\npkg')
+  assert.equal(form.envText, 'T=${T}')
+  assert.equal(form.timeout, '1234')
+  assert.equal(form.failOnStartup, true)
+  assert.equal(form.reconnectEnabled, false)
+  assert.equal(form.reconnectAttempts, '4')
+  assert.deepEqual(emptyMcpForm(), {
+    serverName: '', transport: 'stdio', command: '', argsText: '', envText: '', cwd: '',
+    url: '', headersText: '', timeout: '', failOnStartup: false, reconnectEnabled: true, reconnectAttempts: '',
+  })
+})
+
+test('mcpRowToForm tolerates a row with missing or foreign fields', () => {
+  const form = mcpRowToForm({ id: 'x', transport: 'weird', env: null, headers: undefined, args: undefined, reconnect: 'nope' })
+  assert.equal(form.transport, 'stdio')
+  assert.equal(form.envText, '')
+  assert.equal(form.headersText, '')
+  assert.equal(form.argsText, '')
+  assert.equal(form.reconnectEnabled, true)
+})
+
+test('the MCP pane ships its own copy in both locales', () => {
+  const mcpKeys = Object.keys(ZH).filter((key) => key.startsWith('mcp'))
+  assert.ok(mcpKeys.length >= 40, `expected a full MCP copy set, saw ${mcpKeys.length}`)
+  for (const key of mcpKeys) {
+    assert.equal(typeof ZH[key], 'string', `zh.${key}`)
+    assert.equal(typeof EN[key], 'string', `en.${key}`)
+    assert.ok(ZH[key].trim() !== '' && EN[key].trim() !== '', `${key} must not be empty`)
+  }
+  assert.equal(ZH.tabMcp, 'MCP 管理')
+  assert.equal(ZH.mcpTitle, 'MCP 管理')
 })
 
 test('formatSize humanizes bytes like the list views expect', () => {

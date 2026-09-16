@@ -25,6 +25,10 @@ const { randomUUID } = require('node:crypto')
 const fsP = require('node:fs/promises')
 const { basename, join, relative, resolve, sep } = require('node:path')
 const { homedir } = require('node:os')
+// MCP 管理：dsh 里的一条 MCP server = profile 组合里的一条 dsh-mcp-client 记录，
+// 落点就是该 profile 自己的 cordis.patch.yml。读写规则（只重写标记块、其余字节
+// 原样保留、读不回来就拒写）全在那边，见 src/mcp-profile.js 顶部注释。
+const mcpProfile = require('./mcp-profile.js')
 // settings 服务要求 schemastery schema（可调用 + toJSON；zod 不兼容，register 会抛错被吞）。
 // 宿主沙箱内解析打包依赖可能抛 ERR_INTERNAL_ASSERTION（.pnpm 软链），因此优先沿
 // dsh 全局安装取 settings 服务自用的那份副本，本地开发/测试再退回标准 require。
@@ -648,6 +652,42 @@ function contentTypeFor(p) {
   return map[ext]
 }
 
+// ── MCP 管理（profile cordis.patch.yml 里的 dsh-mcp-client 条目）──────────
+// 只做 DSH 侧：不改写其他 agent 工具的 MCP 配置；写盘只动本插件自己的标记块。
+
+/** 把 mcp-profile 抛出的错误映射成合适的 HTTP 状态码。 */
+function mcpErrorStatus(error) {
+  const message = String((error && error.message) || error)
+  if (/not found/i.test(message)) return 404
+  if (/read-only|cannot be parsed|will not be rewritten|foreign|process\.env\.NAME|left untouched/i.test(message)) return 409
+  if (/invalid profile name|is required|must be|must match|is not a valid URL/i.test(message)) return 400
+  return 500
+}
+
+/** 读一份 profile 的 MCP 现状，组装成前端需要的响应体。 */
+async function mcpSnapshot(profileName, mcpConfig) {
+  const read = await mcpProfile.readMcpRows(profileName, mcpConfig)
+  const profiles = await mcpProfile.listProfiles()
+  let warning
+  if (read.parseError !== undefined) {
+    warning = `managed block cannot be parsed: ${read.parseError}`
+  } else if (read.foreignJs) {
+    warning = 'a !!js expression outside process.env.NAME is present; rows are read-only'
+  } else if (!read.fileMissing && !read.markersPresent && !read.canBootstrap) {
+    warning = 'this patch file declares its own entries; the MCP block cannot be added automatically'
+  }
+  return {
+    profile: read.profile,
+    activeProfile: mcpProfile.activeProfileName(mcpConfig),
+    profiles,
+    patchFile: displayPath(read.patchFile),
+    patchReload: read.patchReload,
+    canWrite: read.parseError === undefined && !read.foreignJs && (read.fileMissing || read.markersPresent || read.canBootstrap),
+    warnings: warning === undefined ? [] : [warning],
+    servers: read.rows,
+  }
+}
+
 module.exports = {
   name: 'skills-management',
   inject: ['skills', 'webServer', 'settings'],
@@ -656,6 +696,11 @@ module.exports = {
   apply(ctx, config = {}) {
     const installedDir = resolve(expandTilde(config.installedDir !== undefined ? config.installedDir : process.env.DSH_HOME ? join(process.env.DSH_HOME, 'skills') : join(homedir(), '.dsh', 'skills')))
     const providerName = config.providerName !== undefined ? config.providerName : 'ntd-skills'
+    // MCP 管理：目标 profile（默认取活动 profile）与 profile 目录覆盖
+    const mcpConfig = {
+      profile: config.mcpProfile,
+      profileDir: config.mcpProfileDir,
+    }
 
     // ── Executor (on-machine source) rows ──
     // dsh first (its root is the installed library, locked); then known defs
@@ -1056,8 +1101,84 @@ module.exports = {
             return
           }
 
+          // ── MCP 管理：/skills-management/api/mcp ──────────────────────
+          // 读：列出目标 profile 里本插件管理的 MCP server（含 Profile 下拉数据）
+          if (req.method === 'GET' && apiPath === '/skills-management/api/mcp') {
+            const profile = query.get('profile') || mcpProfile.activeProfileName(mcpConfig)
+            if (profile === undefined) { sendJson(res, 400, { error: 'no active profile: set config.profile or use ?profile=<name>' }); return }
+            sendJson(res, 200, await mcpSnapshot(profile, mcpConfig))
+            return
+          }
+
+          if (apiPath === '/skills-management/api/mcp' && (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE')) {
+            const profile = query.get('profile') || mcpProfile.activeProfileName(mcpConfig)
+            if (profile === undefined) { sendJson(res, 400, { error: 'no active profile: set config.profile or use ?profile=<name>' }); return }
+            const state = await mcpProfile.loadState(profile, mcpConfig)
+            const taken = new Set(state.entries.map((e) => e.id))
+
+            if (req.method === 'POST') {
+              const body = await readJsonBody(req)
+              const config2 = mcpProfile.normalizeServerInput(body)
+              if (state.entries.some((e) => e.config.serverName === config2.serverName)) {
+                sendJson(res, 409, { error: `serverName '${config2.serverName}' already exists in this profile` })
+                return
+              }
+              const id = mcpProfile.managedId(config2.serverName, taken)
+              state.entries.push({ id, config: config2 })
+              await mcpProfile.writeState(state, state.entries, state.disabledIds)
+              sendJson(res, 201, { id, ...(await mcpSnapshot(profile, mcpConfig)) })
+              return
+            }
+
+            if (req.method === 'PUT') {
+              const body = await readJsonBody(req)
+              const id = typeof body.id === 'string' ? body.id : ''
+              if (id === '') { sendJson(res, 400, { error: 'body must provide id' }); return }
+              const row = state.entries.find((e) => e.id === id)
+              if (row === undefined) { sendJson(res, 404, { error: `MCP server '${id}' not found` }); return }
+              if (!id.startsWith(mcpProfile.MANAGED_ID_PREFIX)) {
+                sendJson(res, 409, { error: `MCP server '${id}' is not managed by this plugin and will not be rewritten` })
+                return
+              }
+              const config2 = mcpProfile.normalizeServerInput(body)
+              const clash = state.entries.find((e) => e.id !== id && e.config.serverName === config2.serverName)
+              if (clash !== undefined) { sendJson(res, 409, { error: `serverName '${config2.serverName}' is already used by '${clash.id}'` }); return }
+              row.config = config2
+              // 启用状态：body.enabled === false 时把该行加进停用清单
+              const disabled = new Set(state.disabledIds)
+              if (body.enabled === false) disabled.add(id)
+              else if (body.enabled === true) disabled.delete(id)
+              await mcpProfile.writeState(state, state.entries, [...disabled])
+              sendJson(res, 200, await mcpSnapshot(profile, mcpConfig))
+              return
+            }
+
+            // DELETE { ids: [...] }（也接受单个 id）
+            const body = await readJsonBody(req)
+            const ids = Array.isArray(body.ids) ? body.ids.map(String) : (typeof body.id === 'string' && body.id !== '' ? [body.id] : [])
+            if (ids.length === 0) { sendJson(res, 400, { error: 'body must provide ids[] or id' }); return }
+            const foreign = ids.filter((id) => !id.startsWith(mcpProfile.MANAGED_ID_PREFIX))
+            if (foreign.length > 0) { sendJson(res, 409, { error: `not managed by this plugin: ${foreign.join(', ')}` }); return }
+            const missing = ids.filter((id) => !taken.has(id))
+            if (missing.length > 0) { sendJson(res, 404, { error: `MCP server not found: ${missing.join(', ')}` }); return }
+            const remove = new Set(ids)
+            await mcpProfile.writeState(
+              state,
+              state.entries.filter((e) => !remove.has(e.id)),
+              state.disabledIds.filter((id) => !remove.has(id)))
+            sendJson(res, 200, await mcpSnapshot(profile, mcpConfig))
+            return
+          }
+
           sendJson(res, 404, { error: 'not found' })
-        } catch (error) { sendJson(res, 400, { error: String(error && error.message || error) }) }
+        } catch (error) {
+          const message = String(error && error.message || error)
+          if (String(req.url || '').includes('/skills-management/api/mcp')) {
+            sendJson(res, mcpErrorStatus(error), { error: message })
+            return
+          }
+          sendJson(res, 400, { error: message })
+        }
       },
     }), 'skills-management: api route')
   },
