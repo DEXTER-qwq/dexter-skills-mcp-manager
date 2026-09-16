@@ -5,10 +5,17 @@
 // 这个文件**只被读取，从不被改写**，所以：
 //   - 注释安全：// 行注释 与 /* 块注释 */  都可以用
 //   - 尾随逗号安全：数组/对象最后一项后面留个逗号也没问题
-//   - 你在 UI 里开关别的 MCP server 不会动到这个文件
+//   - 「MCP 管理」页面里的开关不会动到这个文件（它只写本插件自己的 mcp.json）
 //
-// 顶层可以是数组，也可以是 {"servers": [...]}（下面用的是后者）。
-// 不需要的条目用 "enabled": false，或者直接注释掉整块。
+// 顶层的写法：数组，或 {"servers": [...]}（下面用的是后者）；另外可以加一个
+// 顶层 "disabled": ["名字"] 来停用某些条目，效果和条目里写 "enabled": false 一样。
+//
+// 停用一条的方式（三种都行，随便挑）：
+//   1. 条目里写 "enabled": false  —— 页面可以把这个覆盖回「开」（记在 mcp.json，不动本文件）
+//   2. 把条目整块注释掉
+//   3. 顶层 "disabled": ["my-stdio-server"]
+// 反过来，如果条目是开着的（没写 enabled / 写了 true），页面上就没有开关：
+// 想关它只能回到这个文件改。
 {
   "servers": [
     // 方式一：本机启动一个程序（stdio）
@@ -37,12 +44,13 @@
       "toolCallTimeoutMs": 30000
     },
 
-    // 暂时不用、想留着的条目：整块注释掉就行（这正是它和 mcp.json 的区别）
-    // {
-    //   "serverName": "parked-server",
-    //   "transport": "stdio",
-    //   "command": "python",
-    //   "args": ["D:\\tools\\parked.py"]
-    // },
+    // 方式三：留着但先不开 —— 页面上的开关能把它打开（只写 mcp.json，不动这里）
+    {
+      "serverName": "parked-server",
+      "transport": "stdio",
+      "command": "python",
+      "args": ["D:\\tools\\parked.py"],
+      "enabled": false
+    },
   ]
 }

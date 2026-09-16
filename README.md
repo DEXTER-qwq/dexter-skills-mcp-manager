@@ -24,39 +24,47 @@ DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有
 
 背景：dsh 里一条 MCP server 就是组合里的一条 `@deepseek-ai/dsh-mcp-client` 记录，它的工具以 `mcp__<服务名>__<工具名>` 出现在模型工具表里。
 
-- **列表**：服务名、传输方式、命令行/地址、工具数量、是否连接、是否停用、来源（`配置来源` / `本页新增`）
-- **开关**：停用会把该 server 的工具从**模型工具目录**里移除（server 本身照旧运行），配置不写回 dsh 的任何文件
-- **新增**：`serverName` + `stdio`（command / args / env / cwd）或 `streamable-http`（url / headers），可设 `toolCallTimeoutMs`；新增后**立即挂载到 dsh，无需重启**
-- **删除**：只对「本页新增」的 server 开放；来自 dsh 组合的条目只能开关
-- **环境变量与请求头**：一行一个 `KEY=值`；写 `KEY=${VAR}` 表示**挂载时读宿主环境变量**，不落盘明文
+**以手写配置为主**：server 由你自己写在 `mcp.local.jsonc` 里，这个页面负责把它们挂进 dsh、并告诉你每条现在是什么状态。
 
-#### 它怎么工作（与前几版的根本区别）
+- **列表**：服务名、传输方式、命令行/地址、工具数量、是否连接、来源（`手写配置` / `dsh 组合配置` / `其他插件挂载`）
+- **唯一的写操作**：把手写配置里 `"enabled": false` 的条目**强制打开**（记在本插件状态文件里，你的文件一个字节都不会被改）
+- **没有的按钮**：新增、编辑、删除、从其他插件导入、清掉重复声明、刷新——都不在页面上了（见下节「为什么只剩开关」）
 
-早先的实现去解析并改写 profile 的 `cordis.patch.yml`，于是需要猜活动 profile、手写 YAML 进 dsh 拥有的文件、而且只能看到那一个文件里的 server。现在**完全不碰任何 dsh 配置文件**：
+#### 它怎么工作
+
+早先的实现去解析并改写 profile 的 `cordis.patch.yml`，于是需要猜活动 profile、手写 YAML 进 dsh 拥有的文件、而且只能看到那一个文件里的 server。现在**完全不碰任何 dsh 配置文件，也不改写你的手写配置**：
 
 | 能力 | 实现 |
 | --- | --- |
-| 列表 | 读 `ctx.loader.entries()` —— 这是运行期的真源，所以 **bundle / patch / preset / 任何层**声明的 MCP server 都看得见 |
-| 停用/启用 | 对每个 agent 下一层 `tools.restrict({ deny })`，把该 server 的工具从该 agent 的目录里摘掉（只 deny 当前真实注册的工具名；deny 集合没变就绝不重复 restrict，否则 `tools/change` 会递归把进程卡死） |
-| 新增/删除 | `ctx.loader.create()` / `ctx.loader.remove()` 挂载真实的 `dsh-mcp-client` loader 条目（id 前缀 `sm-mcp-`），与环境里其他 MCP server 走同一条路径 |
-| 持久化 | 只有本插件自己的文件：`$DSH_HOME/skills-management/mcp.json`（原子写、串行化、损坏即当空），记录「哪些 server 被停用」与「本页新增了哪些 server」 |
+| 列表 | 读 `ctx.loader.entries()`（运行期的真源，bundle / patch / preset / 任何层声明的都看得见）**并**读手写配置，一个 `serverName` 只出一行 |
+| 挂载 | `ctx.loader.create()` 挂真实的 `dsh-mcp-client` loader 条目（id 前缀 `sm-mcp-`），启动时和每次开关后都同步一次；手写配置里写着开的就挂，被停用的不挂 |
+| 持久化 | 只有本插件自己的文件：`$DSH_HOME/skills-management/mcp.json`，唯一字段 `forcedOn`（本页强制开过的手写条目） |
 
-因此：**没有 profile 猜测、没有 YAML 生成、没有对 dsh 配置文件的写操作**。`stateFile` 一栏会在界面上告诉你那个文件在哪；删掉它等于把所有开关和自建 server 恢复默认。
+`apply()` 保持**同步**（Cordis 把带 prototype 的函数当构造函数、会忽略返回的 promise，async apply 里 await 之后抛错会变成 unhandled rejection 并可能拖垮进程），异步的挂载都在请求里或 effect 的 fire-and-forget 里做。
 
-停用状态按 `serverName` 记住，所以对「配置来源」的 server 也有效——这正是它不需要改配置文件的原因。`apply()` 保持**同步**（Cordis 把带 prototype 的函数当构造函数、会忽略返回的 promise，async apply 里 await 之后抛错会变成 unhandled rejection 并可能拖垮进程），异步的挂载都在事件回调或请求里做。
+#### 为什么只剩开关
+
+「关掉一条 server」需要写「谁说的开」——而它只能写在**声明它的那个文件**里。本插件能写的只有自己的状态文件，而状态文件里一个名字的缺席只能表示「没被覆盖」，不能表示「关」。所以：
+
+- 手写条目自己写 `"enabled": false`（或注释掉、或放进文件的 `disabled` 列表）= 停用；本页可以覆盖成开。
+- 手写条目写着开、或者 dsh 组合层声明着 = 本页**不画开关**（画一个点了没反应的按钮更糟），行内说明让你去改那一边。
+- 曾经用 `tools.restrict({ deny })` 做「不卸载、只把工具从模型目录摘掉」的遮蔽层：那是给「配置里的 server 只能开关」准备的，现在配置里的 server 不提供开关，整个遮蔽机制（连同它那个防无限递归的守卫）一起删掉了。
 
 #### 两个文件，各归其主
 
 | 文件 | 谁写 | 格式 |
 | --- | --- | --- |
-| `~/.dsh/skills-management/mcp.json` | **只有插件写**（开关、本页新增/删除、导入） | 严格 JSON。读取时容忍注释，但**绝不把容忍结果写回** |
+| `~/.dsh/skills-management/mcp.json` | **只有插件写**（只写 `forcedOn`） | 严格 JSON。读取时容忍注释，但**绝不把容忍结果写回** |
 | `~/.dsh/skills-management/mcp.local.jsonc` | **只有你写**，插件只读、从不改写 | JSONC：`//`、`/* */`、尾随逗号都可以 |
 
-想给 MCP 配置写注释、把不用的条目注释掉留档,就写进 `mcp.local.jsonc`——UI 里的任何开关都不会碰这个文件。模板见 [`docs/mcp.local.example.jsonc`](docs/mcp.local.example.jsonc);改完**重启 dsh** 生效（本插件不做文件监听）。
+想给 MCP 配置写注释、把不用的条目注释掉留档,就写进 `mcp.local.jsonc`——UI 里的开关不会碰这个文件。模板见 [`docs/mcp.local.example.jsonc`](docs/mcp.local.example.jsonc);改完**重启 dsh** 生效（本插件不做文件监听；页面在打开时读一次）。
 
-同名冲突规则:**dsh 组合 > 手写文件 > 本页新增**,只挂载优先级最高的那条(`dsh-mcp-client` 会拒绝重复的 `serverName`),一个名字在列表里只出现一行并标出「有同名声明」。手写文件里的条目在本页**照样能开关**(开关只写 `mcp.json`,那个文件一个字节都不会被改)。唯一要区分的情况是条目自己写着 `"enabled": false`:抑制列表(`disabled`)没法表达「开」,所以这种「本页强制开启」另记在 `mcp.json` 的 `forcedOn` 里,页面会在那行说明它。
+同名冲突规则:**dsh 组合 > 手写文件**,只挂载优先级最高的那条(`dsh-mcp-client` 会拒绝重复的 `serverName`),一个名字在列表里只出现一行并标出「有同名声明」;要消除就删掉配置里多余的那份。
 
-> 要是宿主缺少 `loader` / `tools` 服务（最小组合），页面会显示「能力不可用」而不是报错，并照常列出当前状态。
+旧版本的状态文件（`version` / `disabled` / `servers`）读取时被忽略：里面还有内容的话页面会给一条提示，不会闷声丢掉。
+
+> 要是宿主缺少 `loader` 服务（最小组合），页面会显示「能力不可用」而不是报错，并照常列出当前状态。
+
 
 ## 改造说明（相对上游 0.6.1 删掉了什么）
 
@@ -68,10 +76,11 @@ DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有
 | 市场专属注入开销预热 | 启动后台扫描，仅为市场 6600 条描述预热 token memo | 市场没了，预热无意义 |
 | `.github/workflows/publish.yml` | npm Trusted Publishing CI | 本地私有分支，不再发布到 npm |
 | `docs/demo*.gif`、`client/hooks/*.ts`、`client/components/*.ts` | 旧市场 UI 截图；上一版 koa 架构遗留的 TS hook，运行时从未被加载 | 与现界面不符 / 死代码 |
+| **MCP 的面板式管理** | 新增/编辑/删除 server 的弹窗与 `POST`/`DELETE /api/mcp`、从其他插件导入的 `/api/mcp/import`、清重复声明的 `/api/mcp/prune`、页面「刷新」按钮、状态文件里的 `disabled`/`servers`/`version`、per-agent 的 `tools.restrict({ deny })` 遮蔽层、客户端表单与 env/headers 文本互转 helper | MCP 改成以手写配置为主之后这些都没有对象了：server 由你写文件，本页只做「把手写里停用的条目打开」这一件事。少一层遮蔽机制也顺手删掉了它那个「deny 集合没变就不重复 restrict」的防递归守卫 |
 
 ## MCP 管理不写 dsh 配置
 
-详见上文「它怎么工作」。一句话：只读 `ctx.loader.entries()`，只写 `$DSH_HOME/skills-management/mcp.json`。唯一的输入约束是：`env` / `headers` 里的 `!!js` 只接受 `process.env.NAME` 形态（从 Web UI 写这个标签等价于在宿主进程里执行任意代码），并且在**挂载时**解析成实际值，不会把 `process.env.X` 当字符串塞给 server。
+详见上文「它怎么工作」。一句话：只读 `ctx.loader.entries()` 和你的 `mcp.local.jsonc`，只写 `$DSH_HOME/skills-management/mcp.json` 里的 `forcedOn`。
 
 ## API 面（本地唯一）
 
@@ -85,11 +94,11 @@ GET    /skills-management/api/file?name=&path=&executor=
 POST   /skills-management/api/install               # {name, from:<executor>, overwrite?}
 DELETE /skills-management/api                       # {name, executor?}
 PUT    /skills-management/api/invocation            # {name, modelInvocable}
-GET    /skills-management/api/mcp                   # MCP server 列表（loader + 状态）
-POST   /skills-management/api/mcp                   # {serverName, transport, …}  新增并挂载
-PUT    /skills-management/api/mcp                   # {serverName, enabled}       开关
-DELETE /skills-management/api/mcp                   # {serverName}                卸载（仅本页新增的）
+GET    /skills-management/api/mcp                   # MCP server 列表（loader + 手写配置）
+PUT    /skills-management/api/mcp                   # {serverName, enabled}  把手写里停用的条目打开/关回去
 ```
+
+对 `/api/mcp` 来说 PUT 是唯一写方法：`enabled: true` 只对手写配置里写着 `"enabled": false` 的条目有效（否则 409 并说明该去哪里改），`enabled: false` 撤回这条覆盖。其他方法返回 405；被删掉的 `/api/mcp/import`、`/api/mcp/prune` 返回 404（有回归测试守着）。
 
 MCP 路由没有任何 profile 参数：作用对象就是运行中的这个 dsh 实例（loader 里有什么就管什么）。
 
@@ -170,14 +179,14 @@ dsh plugin why @weibaohui/skills-management      # 应显示 link:D:\11dsh\skill
 设置页侧栏里会出现**两个**同级条目：
 
 - **技能管理**：执行器卡片 → 钻入看该来源技能 → 安装 / 删除 / 隐藏；⚙ 执行器目录：改目录、停用、新增自定义来源、恢复默认；详情页可预览 SKILL.md 全文与附属文件、切换模型可调用
-- **MCP 管理**：列出所有 MCP server，开关 / 新增 / 删除（见上文「MCP 管理」）
+- **MCP 管理**：列出 loader 与手写配置里的 MCP server，代码来源一栏说清每条归谁管；唯一按钮是「打开手写里停用的条目」（见上文「MCP 管理」）
 
 ## 开发
 
 ```bash
 npm install                # 只装 devDeps（@deepseek-ai/schemastery）；运行期依赖为空
 npm run check              # 语法检查（src/index.js、src/mcp-manager.js、client/index.js）
-npm test                   # node --test（宿主面 32 + MCP 19 + 客户端面 20）
+npm test                   # node --test（宿主面 32 + MCP 35 + 客户端面 18）
 npm run build:client       # 由 client/index.js 生成 client/bundle.js
 ```
 
@@ -186,7 +195,7 @@ npm run build:client       # 由 client/index.js 生成 client/bundle.js
 
 `client/bundle.js` 是构建产物，改完 `client/index.js` 必须重新 `build:client`（`test/ui.test.mjs` 有一条「bundle 是否为最新构建」的断言守着）。
 
-MCP 相关的测试全部用临时 `DSH_HOME` 和假 loader/tools/agents，不会碰你真实的 `~/.dsh`。
+MCP 相关的测试全部用临时 `DSH_HOME` 和假 loader/tools，不会碰你真实的 `~/.dsh`。
 
 依赖已按 `package-lock.json` 锁定；卸载/重装请使用 `npm ci`。
 
@@ -195,13 +204,13 @@ MCP 相关的测试全部用临时 `DSH_HOME` 和假 loader/tools/agents，不�
 | 文件 | 作用 |
 | --- | --- |
 | `src/index.js` | 宿主端：执行器扫描、本地 API、skill provider、frontmatter 读取器、MCP 运行时与路由 |
-| `src/mcp-manager.js` | MCP 状态存储、输入校验、loader/restrict 的纯逻辑 |
+| `src/mcp-manager.js` | 手写配置读取（JSONC）、状态存储、输入校验、loader 的纯逻辑 |
 | `client/index.js` | 客户端 React 源码：设置区两个区块（技能 / MCP）+ composer「＋技能」按钮 |
 | `client/bundle.js` | 构建产物（`npm run build:client` 生成，勿手改） |
 | `cordis.patch.yml` | 插件接入宿主 composition 的 insert 行 |
 | `test/skills.test.mjs` | 宿主面测试（含「无子进程/无网络/无第三方 require」守卫） |
-| `test/mcp-manager.test.mjs` | MCP 存储、校验、loader/restrict 与路由测试 |
-| `test/ui.test.mjs` | 客户端面测试（含「无市场/分享残留 + bundle 新鲜度」守卫） |
+| `test/mcp-manager.test.mjs` | MCP 存储、JSONC、校验、loader 与路由测试 |
+| `test/ui.test.mjs` | 客户端面测试（含「无市场/分享残留 + 无已删功能文案 + bundle 新鲜度」守卫） |
 | `docs/overview.html` | 可交互说明页（静态、离线；浏览器直接打开） |
 
 ## 许可

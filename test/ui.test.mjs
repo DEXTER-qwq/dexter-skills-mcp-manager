@@ -5,13 +5,12 @@
 // without primitives present (jsdom shim), and never depend on its internals.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const plugin = require('../client/index.js')
-const { NS, ZH, EN, matchSkill, formatSize, insertComposerText, fetchSkillCandidates,
-  mapToText, textToMap, textToArgs, mcpRowToForm, emptyMcpForm } = plugin.__internals
+const { NS, ZH, EN, matchSkill, formatSize, insertComposerText, fetchSkillCandidates } = plugin.__internals
 
 test('client module declares slots + locale injects', () => {
   assert.equal(plugin.name, '@weibaohui/skills-management') // must equal the boot manifest id
@@ -48,6 +47,27 @@ test('the remote surfaces stay deleted — no market/share client code or copy',
   assert.deepEqual(bannedKeys, [], 'market/share locale keys must not come back')
 })
 
+test('every text file in the repo is valid UTF-8', () => {
+  // Editing a UTF-8 file with a tool that assumes the console code page silently
+  // doubles-encodes every non-ASCII character; this caught exactly that, so the
+  // guard stays. Directories that are never source: .git, node_modules, backups.
+  const root = new URL('..', import.meta.url)
+  const skip = new Set(['.git', 'node_modules'])
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  const bad = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (skip.has(entry.name)) continue
+      const path = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dir)
+      if (entry.isDirectory()) { walk(path); continue }
+      if (!/\.(mjs|js|cjs|json|jsonc|md|html|ya?ml)$/.test(entry.name)) continue
+      try { decoder.decode(readFileSync(path)) } catch { bad.push(entry.name) }
+    }
+  }
+  walk(root)
+  assert.deepEqual(bad, [], `not valid UTF-8: ${bad.join(', ')}`)
+})
+
 test('client/bundle.js is a fresh build of client/index.js', () => {
   const src = readFileSync(new URL('../client/index.js', import.meta.url), 'utf8')
   const bundle = readFileSync(new URL('../client/bundle.js', import.meta.url), 'utf8')
@@ -64,58 +84,29 @@ test('matchSkill covers name/description/keywords case-insensitively', () => {
   assert.equal(matchSkill(skill, 'codex'), false)
 })
 
-// ── MCP pane helpers ────────────────────────────────────────────────────
+// ── MCP pane copy ───────────────────────────────────────────────────────
 
-const enT = (key, vars) => {
-  let out = EN[key] ?? key
-  if (vars) for (const [k, v] of Object.entries(vars)) out = out.split('{' + k + '}').join(String(v))
-  return out
-}
-
-test('mapToText / textToMap round-trip env and headers', () => {
-  assert.equal(mapToText({ A: 'v', B: { js: 'process.env.HOME' } }), 'A=v\nB=${HOME}')
-  assert.equal(mapToText({}), '')
-  assert.equal(mapToText(undefined), '')
-  const parsed = textToMap('A=v\nB=${HOME}\n# comment\n\nC=has=equals', enT)
-  assert.deepEqual(parsed.value, { A: 'v', B: { js: 'process.env.HOME' }, C: 'has=equals' })
-  assert.equal(textToMap('A=v', enT).error, undefined)
-})
-
-test('textToMap rejects malformed lines instead of guessing', () => {
-  for (const bad of ['novalue', '=v', '1BAD=v', 'A v']) {
-    assert.ok(textToMap(bad, enT).error !== undefined, `expected an error for ${JSON.stringify(bad)}`)
+test('the MCP pane keeps no copy for the features that were removed', () => {
+  // The pane is read-only apart from forcing a parked entry on: adding, editing,
+  // deleting, importing and pruning are gone from the host surface, so no copy
+  // may survive to promise them.
+  const removed = [
+    'mcpAdd', 'mcpAddTitle', 'mcpAddHint', 'mcpEdit', 'mcpEditTitle',
+    'mcpDelete', 'mcpDeleteTitle', 'mcpDeleteConfirm', 'mcpDeleted', 'mcpCreated',
+    'mcpImport', 'mcpImportTitle', 'mcpImportHint', 'mcpImportNone', 'mcpImportDo',
+    'mcpImportDone', 'mcpImportSkipped', 'mcpImportOnlyTaken', 'mcpImportReasonNotInstalled',
+    'mcpImportReasonAlreadyManaged', 'mcpImportReasonNameTaken', 'mcpImportReasonInvalid',
+    'mcpPrune', 'mcpPruneDone', 'mcpDuplicateNotice', 'mcpStateRepaired', 'mcpSourceUser',
+    'mcpServerName', 'mcpServerNameHint', 'mcpTransport', 'mcpStdio', 'mcpHttp',
+    'mcpCommand', 'mcpCommandHint', 'mcpArgs', 'mcpArgsHint', 'mcpEnv', 'mcpEnvHint',
+    'mcpHeaders', 'mcpCwd', 'mcpUrl', 'mcpTimeout', 'mcpTimeoutHint', 'mcpSave', 'mcpCancel',
+  ]
+  const stale = removed.filter((key) => ZH[key] !== undefined || EN[key] !== undefined)
+  assert.deepEqual(stale, [], `stale MCP locale keys: ${stale.join(', ')}`)
+  const src = readFileSync(new URL('../client/index.js', import.meta.url), 'utf8')
+  for (const bannedRef of ['mcp/import', 'mcp/prune', 'McpServerDialog', 'McpImportDialog']) {
+    assert.ok(!src.includes(bannedRef), `client source must not reference ${bannedRef}`)
   }
-})
-
-test('textToArgs is one argument per line, blanks dropped', () => {
-  assert.deepEqual(textToArgs('-y\n@scope/pkg\n\n  spaced arg  '), ['-y', '@scope/pkg', 'spaced arg'])
-  assert.deepEqual(textToArgs(''), [])
-  assert.deepEqual(textToArgs(undefined), [])
-})
-
-test('mcpRowToForm / emptyMcpForm keep the dialog fields consistent', () => {
-  const form = mcpRowToForm({
-    serverName: 'gh', transport: 'stdio', command: 'npx', args: ['-y', 'pkg'],
-    env: { T: { js: 'process.env.T' } }, cwd: 'C:/x', url: '', headers: {},
-    toolCallTimeoutMs: 1234,
-  })
-  assert.equal(form.serverName, 'gh')
-  assert.equal(form.argsText, '-y\npkg')
-  assert.equal(form.envText, 'T=${T}')
-  assert.equal(form.timeout, '1234')
-  assert.deepEqual(Object.keys(emptyMcpForm()).sort(), [
-    'argsText', 'command', 'cwd', 'envText', 'headersText', 'serverName', 'timeout', 'transport', 'url',
-  ])
-  assert.equal(emptyMcpForm().transport, 'stdio')
-})
-
-test('mcpRowToForm tolerates a row with missing or foreign fields', () => {
-  const form = mcpRowToForm({ serverName: 'x', transport: 'weird', env: null, headers: undefined, args: undefined })
-  assert.equal(form.transport, 'stdio')
-  assert.equal(form.envText, '')
-  assert.equal(form.headersText, '')
-  assert.equal(form.argsText, '')
-  assert.equal(form.timeout, '')
 })
 
 test('every locale key is actually consumed by the client source', () => {
@@ -130,7 +121,7 @@ test('every locale key is actually consumed by the client source', () => {
 
 test('the MCP pane ships its own copy in both locales', () => {
   const mcpKeys = Object.keys(ZH).filter((key) => key.startsWith('mcp'))
-  assert.ok(mcpKeys.length >= 35, `expected a full MCP copy set, saw ${mcpKeys.length}`)
+  assert.ok(mcpKeys.length >= 25, `expected a full MCP copy set, saw ${mcpKeys.length}`)
   for (const key of mcpKeys) {
     assert.equal(typeof ZH[key], 'string', `zh.${key}`)
     assert.equal(typeof EN[key], 'string', `en.${key}`)

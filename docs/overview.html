@@ -224,13 +224,13 @@
   <table>
     <thead><tr><th>文件</th><th>行数</th><th>作用</th></tr></thead>
     <tbody>
-      <tr><td class="mono">src/index.js</td><td class="num">1259</td><td>宿主端：执行器扫描、本地 API、skill provider、frontmatter 读取器、MCP 运行时与路由</td></tr>
-      <tr><td class="mono">src/mcp-manager.js</td><td class="num">425</td><td>MCP 状态存储、输入校验、loader / restrict 的纯逻辑</td></tr>
-      <tr><td class="mono">client/index.js</td><td class="num">1686</td><td>客户端 React 源码：两个设置区块 + 输入框「＋技能」按钮</td></tr>
-      <tr><td class="mono">client/bundle.js</td><td class="num">1805</td><td>构建产物（<code>npm run build:client</code> 生成，勿手改）</td></tr>
-      <tr><td class="mono">test/skills.test.mjs</td><td class="num">716</td><td>宿主面 32 条（含无子进程 / 无网络 / 无第三方 require 守卫）</td></tr>
-      <tr><td class="mono">test/mcp-manager.test.mjs</td><td class="num">437</td><td>MCP 存储、校验、loader/restrict、路由 19 条</td></tr>
-      <tr><td class="mono">test/ui.test.mjs</td><td class="num">262</td><td>客户端面 20 条（含无市场残留 + bundle 新鲜度）</td></tr>
+      <tr><td class="mono">src/index.js</td><td class="num">1294</td><td>宿主端：执行器扫描、本地 API、skill provider、frontmatter 读取器、MCP 运行时与路由</td></tr>
+      <tr><td class="mono">src/mcp-manager.js</td><td class="num">816</td><td>手写配置读取（JSONC）、状态存储、输入校验、loader 的纯逻辑</td></tr>
+      <tr><td class="mono">client/index.js</td><td class="num">1526</td><td>客户端 React 源码：两个设置区块 + 输入框「＋技能」按钮</td></tr>
+      <tr><td class="mono">client/bundle.js</td><td class="num">1540</td><td>构建产物（<code>npm run build:client</code> 生成，勿手改）</td></tr>
+      <tr><td class="mono">test/skills.test.mjs</td><td class="num">798</td><td>宿主面 32 条（含无子进程 / 无网络 / 无第三方 require 守卫）</td></tr>
+      <tr><td class="mono">test/mcp-manager.test.mjs</td><td class="num">724</td><td>MCP 存储、JSONC、校验、loader、路由 35 条</td></tr>
+      <tr><td class="mono">test/ui.test.mjs</td><td class="num">287</td><td>客户端面 18 条（含无市场残留 + 无已删功能文案 + UTF-8 + bundle 新鲜度）</td></tr>
       <tr><td class="mono">cordis.patch.yml</td><td class="num">13</td><td>把插件行插进宿主 composition</td></tr>
       <tr><td class="mono">scripts/build-client.mjs</td><td class="num">46</td><td>把 <code>client/index.js</code> 包成 loader 模块</td></tr>
     </tbody>
@@ -240,7 +240,7 @@
 
 <!-- ══════════════ 改了什么 ══════════════ -->
 <section id="panel-changes">
-  <h1>7 个提交，改了些什么</h1>
+  <h1>8 个提交，改了些什么</h1>
   <p class="lead">点击任意一条展开细节。原仓库的 <code>.git</code> 已移出到 <code>D:\11dsh\skills-management-upstream-git-backup</code>，当前是全新的本地历史。</p>
   <div class="tl" id="timeline"></div>
 </section>
@@ -269,8 +269,8 @@
         <div><span class="arrow">·</span><span><code>skills</code> → 注册 1 个 provider，把用户库技能喂给模型</span></div>
         <div><span class="arrow">·</span><span><code>webServer</code> → 挂 <code>/skills-management/api</code> 路由</span></div>
         <div><span class="arrow">·</span><span><code>settings</code> → 执行器目录覆盖的持久化</span></div>
-        <div><span class="arrow">·</span><span><code>loader</code> → 枚举 / 挂载 / 卸载 MCP server</span></div>
-        <div><span class="arrow">·</span><span><code>tools</code> + <code>agents</code> → per-agent <code>restrict</code> 停用 MCP</span></div>
+        <div><span class="arrow">·</span><span><code>loader</code> → 读已有的 MCP 条目 / 把手写配置里的 server 挂上去</span></div>
+        <div><span class="arrow">·</span><span><code>tools</code> → 只用来数每个 server 的真实工具数</span></div>
       </div>
     </div>
     <div class="box client">
@@ -297,30 +297,28 @@
       <p class="small dim" style="margin-bottom:0">只动技能目录，不碰 dsh 配置。</p>
     </div>
     <div class="box file">
-      <div class="lbl">MCP：读 loader，写自己的状态文件</div>
+      <div class="lbl">MCP：读 loader + 你的手写配置，只写自己的状态文件</div>
       <div class="flow">
-        <div><span class="arrow">→</span><span>列表：<code>loader.entries()</code>，所有组合层都可见</span></div>
-        <div><span class="arrow">→</span><span>停用：<code>tools.restrict({ deny })</code>（工具名级）</span></div>
-        <div><span class="arrow">→</span><span>新增：<code>loader.create()</code>，id 前缀 <code>sm-mcp-</code></span></div>
-        <div><span class="arrow">→</span><span>状态：<code>$DSH_HOME/skills-management/mcp.json</code></span></div>
+        <div><span class="arrow">→</span><span>列表：<code>loader.entries()</code> + <code>mcp.local.jsonc</code>，同名出一条</span></div>
+        <div><span class="arrow">→</span><span>挂载：<code>loader.create()</code>，id 前缀 <code>sm-mcp-</code></span></div>
+        <div><span class="arrow">→</span><span>开关：只把文件里 <code>"enabled": false</code> 的条目打开</span></div>
+        <div><span class="arrow">→</span><span>状态：<code>$DSH_HOME/skills-management/mcp.json</code>（只放一个 <code>forcedOn</code>）</span></div>
       </div>
-      <p class="small dim" style="margin-bottom:0">不解析、不改写 dsh 的任何 YAML。</p>
+      <p class="small dim" style="margin-bottom:0">不解析、不改写 dsh 的任何 YAML，也不改写你的手写配置。</p>
     </div>
   </div>
 
-  <h2>MCP 停用为什么不用改配置</h2>
-  <pre><span class="dim">// 1) 从状态里取出被停用的 serverName</span>
-<span class="dim">// 2) 只 deny「当前真实注册」的工具名 —— restrict() 对未知名字会抛错</span>
-const deny = denyNamesForDisabled(disabledNames, tools.schemas())
-<span class="dim">// 3) deny 集合没变就绝不重复 restrict：</span>
-<span class="dim">//    restrict() 会同步触发 tools/change，而监听器又会回到这个函数，</span>
-<span class="dim">//    不比较就会无限递归，把整个进程卡死（参考实现踩过这个坑）</span>
-if (current &amp;&amp; current.deny.join('\0') === deny.join('\0')) return
-<span class="dim">// 4) 有变化才换层：老手 agent 作用域，只影响这一个 agent</span>
-const disposer = agentCtx.get('tools').restrict({ deny })</pre>
+  <h2>为什么开关只能「开」不能「关」</h2>
+  <p class="small">「关掉一条 server」必须写在<strong>声明它的那个文件</strong>里。本插件能写的只有自己的状态文件，而状态文件里一个名字的<em>缺席</em>只能表示「没被覆盖」，不能表示「关」——所以页面只做它能兑现的那一件事：把手写配置里 <code>"enabled": false</code> 的条目强制打开，并记下这份覆盖。</p>
+  <pre><span class="dim">// 手写配置（mcp.local.jsonc）——只有你写，插件从不改写</span>
+{ "serverName": "ssh-mcp-server", "command": "npx", "args": ["-y", "@fangjunjie/ssh-mcp-server"], "enabled": false }
+<span class="dim">// ↑ 页面上点「启用」之后，插件自己的 mcp.json：</span>
+{ "forcedOn": ["ssh-mcp-server"] }
+<span class="dim">// 条目本身、注释、尾随逗号都原样保留；点「停用」就把名字从 forcedOn 里删掉。</span>
+<span class="dim">// 没写 enabled:false（也就是开着）的条目页面上不画开关：要关只能回文件里改。</span></pre>
 
   <div class="note">
-    <b>为什么 <code>apply()</code> 必须是同步的？</b> Cordis 把带 prototype 的函数当构造函数，会忽略它返回的 promise。于是 <code>async apply</code> 里 <code>await</code> 之后抛的错会变成 unhandled rejection，可能直接拖垮整个 dsh 进程。所以插件只做同步注册，异步的挂载/restrict 都放在 effect、事件回调或请求里。
+    <b>为什么 <code>apply()</code> 必须是同步的？</b> Cordis 把带 prototype 的函数当构造函数，会忽略它返回的 promise。于是 <code>async apply</code> 里 <code>await</code> 之后抛的错会变成 unhandled rejection，可能直接拖垮整个 dsh 进程。所以插件只做同步注册，异步的挂载都放在 effect 的 fire-and-forget 或请求里。
   </div>
 
   <div class="note ok">
@@ -399,8 +397,8 @@ const disposer = agentCtx.get('tools').restrict({ deny })</pre>
       <tr><td>无市场 / 分享残留</td><td>客户端源码与 locale 键不得再出现市场、分享、profile patch 相关字样</td></tr>
       <tr><td>bundle 新鲜度</td><td><code>client/bundle.js</code> 必须包含当前 <code>client/index.js</code> 的内容</td></tr>
       <tr><td>apply 同步</td><td><code>apply()</code> 不得返回 promise（否则可能拖垮进程）</td></tr>
-      <tr><td>restrict 不循环</td><td>deny 集合没变时不得再次调用 <code>tools.restrict</code></td></tr>
-      <tr><td>只写自己的文件</td><td>MCP 增删改之后，临时 DSH_HOME 里只能多出 <code>skills-management/mcp.json</code></td></tr>
+      <tr><td>开关的边界</td><td>手写条目写着开时 PUT 必须 409（并说明去改哪个文件），而不是静默改一份没人读的状态</td></tr>
+      <tr><td>只写自己的文件</td><td>开关之后临时 DSH_HOME 里只有 <code>skills-management/mcp.json</code> 变过，<code>mcp.local.jsonc</code> 字节不变</td></tr>
     </tbody>
   </table>
 
@@ -415,7 +413,7 @@ const disposer = agentCtx.get('tools').restrict({ deny })</pre>
   <ul>
     <li>设置侧栏出现 <b>两个</b>同级条目：技能管理、MCP 管理</li>
     <li>技能管理 →「已安装」：应列出本机各执行器与技能数（这台机器实测 17 行）</li>
-    <li>MCP 管理：列出 loader 里所有 MCP server；顶部显示状态文件路径 <code>~/.dsh/skills-management/mcp.json</code></li>
+    <li>MCP 管理：列出手写配置与 loader 里的 MCP server；顶部显示两个文件的路径，唯一的按钮出现在「手写里停用」的行上</li>
   </ul>
 </section>
 
@@ -438,21 +436,22 @@ const disposer = agentCtx.get('tools').restrict({ deny })</pre>
   <h2>验证与卸载</h2>
   <div class="cmdline"><code id="cmd-why">dsh plugin why @weibaohui/skills-management</code><button class="copy" data-copy="cmd-why">复制</button></div>
   <div class="cmdline"><code id="cmd-rm">dsh plugin remove @weibaohui/skills-management</code><button class="copy" data-copy="cmd-rm">复制</button></div>
-  <p class="small muted">卸载插件不会删掉 <code>~/.dsh/skills-management/mcp.json</code>（它记着你的 MCP 开关）。想彻底清干净，手动删掉那个目录即可。</p>
+  <p class="small muted">卸载插件不会删掉 <code>~/.dsh/skills-management/</code> 目录（<code>mcp.json</code> 记着你的覆盖，<code>mcp.local.jsonc</code> 是你的手写配置）。想彻底清干净，手动删掉那个目录即可。</p>
 
   <h2>相关路径</h2>
   <table>
     <tbody>
       <tr><td class="mono">仓库</td><td><code>D:\11dsh\skills-management</code></td></tr>
       <tr><td class="mono">上游 .git 备份</td><td><code>D:\11dsh\skills-management-upstream-git-backup</code></td></tr>
-      <tr><td class="mono">MCP 状态</td><td><code>~/.dsh/skills-management/mcp.json</code></td></tr>
+      <tr><td class="mono">MCP 覆盖状态</td><td><code>~/.dsh/skills-management/mcp.json</code></td></tr>
+      <tr><td class="mono">MCP 手写配置</td><td><code>~/.dsh/skills-management/mcp.local.jsonc</code></td></tr>
       <tr><td class="mono">技能用户库</td><td><code>~/.dsh/skills</code></td></tr>
       <tr><td class="mono">本页</td><td><code>docs/overview.html</code></td></tr>
     </tbody>
   </table>
 
   <footer>
-    <p>本页由仓库内的静态说明生成，数据取自 <code>git log</code>、<code>package.json</code> 与三份测试的实际运行结果（71/71 通过）。</p>
+    <p>本页由仓库内的静态说明生成，数据取自 <code>git log</code>、<code>package.json</code> 与三份测试的实际运行结果（85/85 通过）。</p>
   </footer>
 </section>
 
@@ -512,7 +511,7 @@ const COMMITS = [
   },
   {
     sha: 'fab0dcd', kind: 'add', title: '重构 MCP：改由 loader 驱动 + 插件自有状态文件',
-    stat: '+2705 / −171', date: '第 7 步（当前）',
+    stat: '+2705 / −171', date: '第 7 步',
     body: `
       <p class="small">按参考实现 <code>dsh-skills-mcp-group-manager</code> 重做，<b>完全不碰 dsh 的任何配置文件</b>：</p>
       <table class="small">
@@ -525,6 +524,23 @@ const COMMITS = [
         </tbody>
       </table>
       <p class="small">同时删掉 <code>src/mcp-profile.js</code> 及其 21 条测试、profile 下拉、编辑弹窗；<code>apply()</code> 保持同步；缺 loader / tools 时降级为「能力不可用」。</p>`
+  },
+  {
+    sha: 'HEAD', kind: 'del', title: 'MCP 改成以手写配置为主：页面只剩一个开关',
+    stat: '+520 / −690', date: '第 8 步（当前）',
+    body: `
+      <p class="small">server 改由你自己写在 <code>mcp.local.jsonc</code> 里，插件只读、从不改写（JSONC：注释与尾随逗号都安全）。随之删掉的东西：</p>
+      <table class="small">
+        <thead><tr><th>删掉</th><th>理由</th></tr></thead>
+        <tbody>
+          <tr><td>新增 / 编辑 / 删除 server 的弹窗与 <code>POST</code>、<code>DELETE /api/mcp</code></td><td>server 由你写文件，页面不再需要表单；状态文件也只留 <code>forcedOn</code> 一个字段</td></tr>
+          <tr><td><code>/api/mcp/import</code>（从其他插件导入）</td><td>它存在的意义是把别人的 server 抄进本插件状态——既然不再存 server，就没有「抄进来」这回事</td></tr>
+          <tr><td><code>/api/mcp/prune</code>（清重复声明）</td><td>它清的是本插件状态里的重复声明，而状态里已经没有 server 了</td></tr>
+          <tr><td>per-agent <code>tools.restrict({ deny })</code> 遮蔽层</td><td>它只为「配置里的 server 只能开关」而存在；现在配置里的 server 不提供开关，整个机制连同防递归守卫一起删除（<code>agents</code> 也不再需要注入）</td></tr>
+          <tr><td>页面「刷新」按钮</td><td>以手动配置为主：打开页面读一次，改完文件重启 dsh</td></tr>
+        </tbody>
+      </table>
+      <p class="small">保留并强化的：开关只做它能兑现的一件事——把手写配置里 <code>"enabled": false</code> 的条目强制打开（记进 <code>forcedOn</code>，你的文件一个字节都不会动）；写着开的条目页面上不画开关，行内说明让你去改文件。</p>`
   }
 ];
 
@@ -536,11 +552,12 @@ const FEATURES = [
   { cat: 'skills', name: '删除技能', how: '按来源删除；显式标记 readOnly 的来源拒绝删除。删除用户库技能会刷新 provider。' },
   { cat: 'skills', name: '执行器目录管理', how: '内置来源可改目录、可停用；可新增自定义来源；「恢复默认」整体清空。走宿主 settings 服务持久化，改完即生效。' },
   { cat: 'skills', name: '全库搜索与排序', how: '跨所有来源按名称 / 描述 / 关键词过滤；可按注入开销排序；长列表分页渲染避免一次性挂载。' },
-  { cat: 'mcp', name: '列出所有 MCP server', how: '读 loader.entries()，所以来自 bundle、profile patch、agent preset 的 server 都能看到，不解析任何配置文件。' },
-  { cat: 'mcp', name: '逐个停用 / 启用', how: '对每个 agent 下一层 tools.restrict({ deny })，把该 server 的工具从模型工具目录摘掉；server 本身继续运行。deny 集合没变就不重复 restrict，避免 tools/change 递归卡死。',
-    why: '停用状态按 serverName 记在插件状态文件里，所以对「配置来源」的 server 同样有效——这正是它不需要改 dsh 配置的原因。' },
-  { cat: 'mcp', name: '新增 server 并立即挂载', how: '校验后写入状态文件，再用 loader.create() 挂一个真实的 dsh-mcp-client 条目（id 前缀 sm-mcp-），无需重启。支持 stdio（command/args/env/cwd）与 streamable-http（url/headers）、工具调用超时。' },
-  { cat: 'mcp', name: '删除（只限本页新增的）', how: 'loader.remove() 卸载条目并清掉状态；来自组合层的 server 只能开关，删除会返回 409 并提示改你自己的配置。' },
+  { cat: 'mcp', name: '列出所有 MCP server', how: '读 loader.entries() 加你的手写配置 mcp.local.jsonc；同名只出一条，优先级 dsh 组合 > 手写文件，行上标出「有同名声明」。' },
+  { cat: 'mcp', name: '把手写里停用的条目打开', how: '手写条目写着 "enabled": false 时行上出现开关：点开后写进插件状态文件的 forcedOn，并真的挂上 loader 条目；再点一下撤回。',
+    why: '覆盖只落在 mcp.json，你的手写文件（含注释、尾随逗号）一个字节都不会被改。' },
+  { cat: 'mcp', name: '写着开的条目不给开关', how: '「关掉」必须写进声明它的那个文件，状态文件表达不了「关」；这种行不画按钮，行内直接说明去改哪里。',
+    why: '画一个点了没反应的按钮比不画更糟——这正是上一版被投诉的地方。' },
+  { cat: 'mcp', name: '启动时同步挂载', how: '读手写配置里所有开着的条目，用 loader.create() 挂成真实的 dsh-mcp-client 条目（id 前缀 sm-mcp-）；已经有同名条目的层优先，绝不重复挂。' },
   { cat: 'mcp', name: '显示连接与工具数', how: '从 loader 条目判断是否 live、从 tools.schemas() 数出该命名空间下真实工具数；未连接的行会标出来。' },
   { cat: 'mcp', name: '环境变量不落盘明文', how: 'env / headers 里写 KEY=${VAR} 存成 process.env 引用，挂载时才解析；只接受这一种表达式形态（从 Web UI 写任意 !!js 等于在宿主进程里执行代码）。', why: '变量未设置时该键被跳过，而不是把 process.env.X 这串文字当密码传给 server。' },
   { cat: 'composer', name: '输入框「＋技能」按钮', how: '在输入框左侧插一个 chip，点开自带搜索框的候选浮层（候选来自宿主技能注册表），选中即把 /技能名 写进草稿。支持 ↑/↓/Enter/Esc 与 IME 组词保护。' },
@@ -566,21 +583,18 @@ const APIS = [
   { m: 'GET', p: '/api/executor-settings', d: '执行器目录设置（读）', detail: '返回全部内置来源（含被停用的，UI 置灰）与自定义来源，每行带 locked / managedByConfig / disabled / overridden 标记。' },
   { m: 'PUT', p: '/api/executor-settings', d: '执行器目录设置（写）', detail: '整体替换 body { dirs, disabled, extra }。逐行校验：dsh 锁定不可改、key 必须 kebab、目录非空、key 不重复。校验失败 400，持久化在校验之后。',
     req: `{ "dirs": { "codex": "~/.codex/skills" }, "disabled": ["kilo"], "extra": [] }` },
-  { m: 'GET', p: '/api/mcp', d: 'MCP server 列表', detail: '从 loader 枚举所有 MCP server，join 本插件状态。同时返回 stateFile、loader/mount/restrict 能力标记。',
+  { m: 'GET', p: '/api/mcp', d: 'MCP server 列表', detail: 'loader 里的条目 join 你的手写配置。同时返回 stateFile、localFile、localStatus/localError/localInvalid、stateStatus，以及 loader/mount 能力标记。',
     res: `{ "servers": [ { "serverName": "github", "source": "configured",
                     "entryId": "mcp-github", "transport": "stdio",
-                    "enabled": true, "live": true, "toolCount": 2,
-                    "command": "npx", "args": ["-y", "…"] } ],
+                    "enabled": true, "switchable": false, "live": true, "toolCount": 2 },
+                  { "serverName": "ssh-mcp-server", "source": "local",
+                    "enabled": false, "switchable": true, "enabledInFile": false } ],
   "stateFile": "~\\\\.dsh\\\\skills-management\\\\mcp.json",
-  "loaderAvailable": true, "mountAvailable": true, "restrictAvailable": true }` },
-  { m: 'POST', p: '/api/mcp', d: '新增 MCP server', detail: '校验后写入状态并 loader.create() 挂载，立即生效。serverName 重复、或与组合层已有的重名都会 409。',
-    req: `{ "serverName": "local", "transport": "stdio",
-  "command": "npx", "args": ["-y", "some-mcp-server"],
-  "env": { "TOKEN": "\${MY_TOKEN}" }, "toolCallTimeoutMs": 60000 }`,
-    res: `201 { "created": "local", "servers": [ … ] }` },
-  { m: 'PUT', p: '/api/mcp', d: '停用 / 启用', detail: 'body { serverName, enabled }。配置来源的 server 只换 restrict 遮蔽层；手写文件里的条目记进状态文件的 disabled 列表（那个文件永不被改写）；本页新增的还会真的卸载/重挂 loader 条目。手写条目自己写了 "enabled": false 时，开启会记进状态文件的 forcedOn —— 抑制列表表达不了「开」。',
-    req: `{ "serverName": "github", "enabled": false }` },
-  { m: 'DELETE', p: '/api/mcp', d: '删除 MCP server', detail: 'body { serverName }。仅限本页新增的；配置来源的返回 409，未知的返回 404。' }
+  "localFile": "~\\\\.dsh\\\\skills-management\\\\mcp.local.jsonc",
+  "localStatus": "ok", "loaderAvailable": true, "mountAvailable": true }` },
+  { m: 'PUT', p: '/api/mcp', d: '打开 / 撤回手写里停用的条目', detail: 'body { serverName, enabled }。只对手写配置里写着 "enabled": false 的条目有效：enabled=true 记进状态文件的 forcedOn 并挂载，enabled=false 撤回覆盖并卸载。其他行返回 409 并说明该去改哪个文件；未知名字 404，其他方法 405，/import 与 /prune 已删除并返回 404（都有回归测试守着）。',
+    req: `{ "serverName": "ssh-mcp-server", "enabled": true }`,
+    res: `200 { "servers": [ … ], "stateFile": "…" }  // mcp.json 里多了 { "forcedOn": ["ssh-mcp-server"] }` }
 ];
 
 const RISKS = [
@@ -594,8 +608,8 @@ const RISKS = [
 
 const TESTS = [
   { file: 'test/skills.test.mjs', n: 32, what: '执行器扫描、详情/文件 API、收编与删除、治理键、frontmatter 读取器、开销统计，以及「无子进程 / 无网络 / 无第三方 require」守卫' },
-  { file: 'test/mcp-manager.test.mjs', n: 19, what: '状态存储往返与原子性、损坏降级、输入校验、${VAR} 解析、loader/restrict 纯逻辑，以及用假 loader/tools/agents 跑完整增删改流程' },
-  { file: 'test/ui.test.mjs', n: 20, what: 'locale 双语键集一致、无硬编码颜色、无市场/分享残留、bundle 新鲜度、两个设置区块注册、picker 与表单辅助函数' }
+  { file: 'test/mcp-manager.test.mjs', n: 35, what: '状态往返与原子性、损坏降级、旧格式忽略、JSONC 读取、手写配置的各种形状、输入校验、${VAR} 解析、loader 纯逻辑，以及用假 loader/tools 跑完整开关流程（含「手写文件字节不变」与「409 边界」）' },
+  { file: 'test/ui.test.mjs', n: 18, what: 'locale 双语键集一致、无硬编码颜色、无市场/分享残留、无已删功能文案、全仓库 UTF-8 合法性、bundle 新鲜度、两个设置区块注册、picker 与 composer 插字' }
 ];
 
 /* ── 渲染 ── */

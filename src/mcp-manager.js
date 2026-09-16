@@ -1,7 +1,7 @@
 'use strict'
 
 /**
- * MCP manager — plugin-owned state, and the pure logic behind the MCP pane.
+ * MCP manager — the pure logic behind the MCP pane.
  *
  * WHY THIS REPLACES THE OLD APPROACH: the first implementation managed MCP by
  * editing the profile's own `cordis.patch.yml`. That meant guessing which
@@ -12,20 +12,20 @@
  * - **Listing** reads `ctx.loader.entries()`, so every configured MCP server is
  *   visible no matter which layer declared it (bundle, profile patch, agent
  *   preset) — nothing is parsed or rewritten.
- * - **Enabling/disabling a configured server** uses the per-agent
- *   `tools.restrict({ deny })` layer: the server keeps running, but its tools
- *   are removed from that agent's catalog. No config file is touched.
- * - **Adding/removing a server** mounts/unmounts a real loader entry named
- *   `@deepseek-ai/dsh-mcp-client`, so it takes effect immediately and exactly
+ * - **The hand-written file** `mcp.local.jsonc` is read on every request and
+ *   never written: it is the user's file, and it is where the servers live.
+ *   Its servers are mounted/unmounted as real loader entries named
+ *   `@deepseek-ai/dsh-mcp-client` (`sm-mcp-<name>`), so they take effect exactly
  *   like a configured row.
  *
  * The only thing written to disk is this plugin's own state file:
  *
  *   <DSH_HOME>/skills-management/mcp.json
  *
- * It holds the disabled flags and the user-added servers; reads fall back to an
- * empty state on a missing or corrupt file, and writes are atomic (temp file +
- * rename) and serialized through a promise chain.
+ * It holds one list, `forcedOn` — the hand-written entries this page switched on
+ * although the file parks them. Reads fall back to an empty state on a missing
+ * or corrupt file, and writes are atomic (temp file + rename) and serialized
+ * through a promise chain.
  *
  * Runtime dependencies: node: builtins only.
  */
@@ -44,7 +44,6 @@ const SERVER_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 /** `process.env.NAME` / `process.env['NAME']` / `process.env["NAME"]`. */
 const JS_ENV_RE = /^process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[['"]([^'"\]]+)['"]\])$/
-const STATE_VERSION = 1
 
 /**
  * An `env`/`headers` value written as `KEY=${VAR}` in the UI: the user asked to
@@ -74,13 +73,17 @@ const localFile = () => join(stateDir(), 'mcp.local.jsonc')
 /**
  * Empty state — also the fallback for a missing or unreadable file.
  *
- * `disabled` suppresses a row; `forcedOn` records the names the page switched
- * back on although the hand-written entry parks itself with
- * `"enabled": false`. Two lists are needed because a suppression list cannot
- * express "on": removing a name from `disabled` only means "not suppressed",
- * which for such an entry still leaves it off.
+ * The state file holds exactly one thing: `forcedOn`, the server names this page
+ * switched ON although the hand-written entry parks itself with
+ * `"enabled": false`. Everything else about a server lives in
+ * `mcp.local.jsonc`, which the user owns and this plugin never writes.
+ *
+ * There is no "off" list on purpose: switching a row off from the page would
+ * mean overriding a source that says "on", and every on/off decision belongs to
+ * a file that already states it. So the page offers exactly what it can honour —
+ * forcing a parked entry on, and dropping that override again.
  */
-const emptyState = () => ({ version: STATE_VERSION, disabled: [], forcedOn: [], servers: [] })
+const emptyState = () => ({ forcedOn: [] })
 
 /** The string-list fields of the state file, sanitised identically. */
 const nameList = (raw, field) => (Array.isArray(raw?.[field])
@@ -235,24 +238,25 @@ function readLocalConfig(file = localFile()) {
  * Normalize an untrusted parsed document. Anything that does not match the
  * expected shape is dropped rather than repaired: this file is small, and a
  * half-understood entry is worse than a missing one.
+ *
+ * The reader understands exactly one key. Older state files also carried
+ * `version`, `disabled` and `servers` (page-added servers were retired in favour
+ * of hand-written config); those keys are ignored, and {@link legacyStateKeys}
+ * reports the ones that still hold something so the page can say so instead of
+ * letting the data disappear without a word.
  */
 function normalizeState(raw) {
   if (!isPlainObject(raw)) return emptyState()
-  const disabled = nameList(raw, 'disabled')
-  const forcedOn = nameList(raw, 'forcedOn')
-  const servers = []
-  const seen = new Set()
-  if (Array.isArray(raw.servers)) {
-    for (const entry of raw.servers) {
-      if (!isPlainObject(entry)) continue
-      let validated
-      try { validated = validateServerInput(entry) } catch { continue }
-      if (seen.has(validated.serverName)) continue
-      seen.add(validated.serverName)
-      servers.push({ ...validated, enabled: entry.enabled !== false })
-    }
-  }
-  return { version: STATE_VERSION, disabled, forcedOn, servers }
+  return { forcedOn: nameList(raw, 'forcedOn') }
+}
+
+/** Retired state keys that still hold content, for the one-time notice. */
+function legacyStateKeys(raw) {
+  if (!isPlainObject(raw)) return undefined
+  const out = {}
+  if (Array.isArray(raw.disabled) && raw.disabled.length > 0) out.disabled = raw.disabled.length
+  if (Array.isArray(raw.servers) && raw.servers.length > 0) out.servers = raw.servers.length
+  return Object.keys(out).length === 0 ? undefined : out
 }
 
 /**
@@ -265,7 +269,7 @@ function createStore({ logger = console } = {}) {
   let state = emptyState()
   let writeChain = Promise.resolve()
   let tempSeq = 0
-  /** How the last load went: 'ok' | 'missing' | 'empty' | 'repaired' | 'corrupt'. */
+  /** How the last load went: 'ok' | 'missing' | 'empty' | 'corrupt'. */
   let loadStatus = { status: 'ok' }
 
   /**
@@ -286,9 +290,10 @@ function createStore({ logger = console } = {}) {
     }
     state = normalizeState(parsed.value)
     loadStatus = {
-      status: state.servers.length === 0 && state.disabled.length === 0 ? 'empty' : 'ok',
+      status: state.forcedOn.length === 0 ? 'empty' : 'ok',
       // the file was read through comments/stray commas; it was NOT rewritten
       tolerated: parsed.hadComments === true ? 'comments' : undefined,
+      legacy: legacyStateKeys(parsed.value),
     }
     return state
   }
@@ -547,13 +552,6 @@ function loaderServers(loader) {
   return out
 }
 
-/** Just the composed rows — those this plugin may show and toggle, not mount. */
-function configuredServers(loader) {
-  return loaderServers(loader)
-    .filter((entry) => entry.owner === undefined)
-    .map(({ id, config, live }) => ({ id, config, live }))
-}
-
 /**
  * The mounted entry for one serverName, whoever owns it. Used to refuse a mount
  * that would collide: `dsh-mcp-client` rejects a duplicate `serverName` in the
@@ -577,33 +575,16 @@ function toolsOfServer(schemas, serverName) {
 }
 
 /**
- * Exact deny list for the disabled servers against the live tool surface.
- * `tools.restrict` throws on an unknown name, so only names that are currently
- * registered are returned.
- */
-function denyNamesForDisabled(disabledNames, schemas) {
-  if (disabledNames.length === 0) return []
-  const live = (Array.isArray(schemas) ? schemas : [])
-    .map((tool) => tool?.name)
-    .filter((name) => typeof name === 'string' && name.startsWith('mcp__'))
-  const deny = []
-  for (const serverName of disabledNames) {
-    const prefix = `mcp__${serverName}__`
-    for (const name of live) if (name.startsWith(prefix)) deny.push(name)
-  }
-  return deny
-}
-
-/**
  * One server's state, as the API reports it.
  *
  * `source` decides what the row offers:
- * - `configured` — declared by a composition layer; this plugin only ever
- *   toggles it (its config belongs to the user's dsh setup).
- * - `user` — mounted by this plugin; toggle, edit and delete are all ours.
+ * - `configured` — declared by a composition layer (bundle / profile patch /
+ *   preset). Its config belongs to the user's dsh setup, so the row reports it.
  * - `foreign` — mounted at runtime by ANOTHER plugin. Removing or replacing it
- *   is that plugin's business, so the row is read-only here; the UI explains
- *   where to manage it.
+ *   is that plugin's business, so the row is read-only here.
+ * - `local` — declared in the hand-written `mcp.local.jsonc`, which this plugin
+ *   never writes. `switchable` says whether this page's switch means anything
+ *   for it: only a parked entry (`"enabled": false`) can be forced on.
  *
  * The input is a flat record assembled by {@link listServers} — never a live
  * loader object, so nothing un-serializable can escape through the API.
@@ -615,13 +596,13 @@ function publicServer(record) {
     entryId: record.id,
     transport: record.transport,
     enabled: record.enabled,
-    // false only for a hand-written entry that parks itself with
-    // `"enabled": false`: the page can still switch it on, and says so
+    // false for a hand-written entry that parks itself with `"enabled": false`
     enabledInFile: record.enabledInFile !== false,
-    // true when the page switched such an entry back on, overriding the file
+    // true when this page forced such an entry on, overriding the file
     enabledForced: record.enabledForced === true,
+    // whether this page's switch can do anything for the row
+    switchable: record.switchable === true,
     live: record.live === true,
-    removable: record.source === 'user',
     // true when another source declares this same name: the others are ignored,
     // because dsh-mcp-client refuses a duplicate serverName
     alsoDeclared: record.alsoDeclared === true,
@@ -638,47 +619,34 @@ function publicServer(record) {
 }
 
 /**
- * Merge the three universes into the rows the pane shows.
+ * Merge the two universes into the rows the pane shows.
  *
- * - **configured** — from the loader (every composition layer, nothing parsed).
- *   Its `enabled` flag has no home in a config file, so it is remembered by
- *   serverName in the state file's `disabled` list.
+ * - **configured / foreign** — read from the loader. Always on as far as this
+ *   plugin is concerned: a layer that wants one off says so in its own config.
  * - **local** — the hand-written `mcp.local.jsonc`. The plugin only ever reads
- *   that file, so a row's own `enabled` field is the truth; the UI shows it
- *   read-only so annotations can never be invalidated by a toggle.
- * - **user** — added through this page, stored in the plugin-owned state file.
+ *   that file, so its per-entry `enabled` is the default and the state file's
+ *   `forcedOn` list is this page's override. A row is switchable exactly when
+ *   the file parks it — otherwise there is nothing for the page to override.
  *
- * A name declared in more than one place resolves in that order, and the shadowed
- * row is reported (`shadowed: true`) rather than silently dropped — a duplicate
- * serverName would otherwise make `dsh-mcp-client` fail.
+ * A name declared in more than one place resolves composed/foreign > local, and
+ * the shadowed row is reported (`alsoDeclared: true`) rather than silently
+ * dropped — a duplicate serverName would otherwise make `dsh-mcp-client` fail.
  *
  * @param loader - the loader service (may be absent in a minimal composition).
- * @param state - this plugin's state.
+ * @param state - this plugin's state (just `forcedOn`).
  * @param schemas - `ctx.tools.schemas()`, for per-server tool counts.
  * @param local - `readLocalConfig()` output, or undefined when unavailable.
  */
 function listServers(loader, state, schemas, local) {
-  const disabled = new Set(Array.isArray(state?.disabled) ? state.disabled : [])
   const forcedOn = new Set(Array.isArray(state?.forcedOn) ? state.forcedOn : [])
-  const userServers = Array.isArray(state?.servers) ? state.servers : []
   const localServers = Array.isArray(local?.servers) ? local.servers : []
   const rows = []
-  const claimed = new Set()
   const loaderRows = loaderServers(loader)
-  // liveness of OUR dynamic mounts comes from their loader entry, so a mount
-  // that failed (bad command, port in use) shows as not-live instead of lying
-  const selfMounted = new Map()
-  for (const entry of loaderRows) {
-    if (entry.owner === 'self') selfMounted.set(entry.config.serverName, entry.live)
-  }
 
   // Exactly one row per serverName, resolved by precedence:
-  //   composed/foreign (innermost truth) > hand-written file > page-added.
-  // The owner map decides the label up front so emission order cannot matter —
-  // a startup mount racing this read used to emit the same name twice, once as
-  // 'local' and once as 'user'.
+  //   composed/foreign (innermost truth) > hand-written file.
+  // The owner map decides the label up front so emission order cannot matter.
   const ownerOf = new Map()
-  for (const server of userServers) ownerOf.set(server.serverName, 'user')
   for (const server of localServers) ownerOf.set(server.serverName, 'local')
   for (const entry of loaderRows) {
     if (entry.owner !== 'self') ownerOf.set(entry.config.serverName, entry.owner === 'other' ? 'foreign' : 'configured')
@@ -693,7 +661,6 @@ function listServers(loader, state, schemas, local) {
     declaredBy.set(name, set)
   }
   for (const server of localServers) declare(server.serverName, 'local')
-  for (const server of userServers) declare(server.serverName, 'user')
   for (const entry of loaderRows) {
     if (entry.owner === 'self') continue
     declare(entry.config.serverName, entry.owner === 'other' ? 'foreign' : 'configured')
@@ -716,7 +683,8 @@ function listServers(loader, state, schemas, local) {
     if (entry.owner === 'self') ownEntries.set(entry.config.serverName, entry)
   }
 
-  // 1) rows we do not own: composed and other plugins'
+  // 1) rows we do not own: composed and other plugins'. This page cannot switch
+  // them off — their own config says "on" — so it does not offer to.
   for (const entry of loaderRows) {
     if (entry.owner === 'self') continue
     push({
@@ -726,7 +694,8 @@ function listServers(loader, state, schemas, local) {
       ownerPlugin: entry.plugin,
       transport: entry.config.transport === 'streamable-http' ? 'streamable-http' : 'stdio',
       enabledInFile: true,
-      enabled: !disabled.has(entry.config.serverName),
+      switchable: false,
+      enabled: true,
       live: entry.live,
       toolCount: toolsOfServer(schemas, entry.config.serverName).length,
       command: entry.config.command,
@@ -739,24 +708,24 @@ function listServers(loader, state, schemas, local) {
     })
   }
 
-  // 2) the hand-written file
+  // 2) the hand-written file: its own `enabled` is the default, and the state
+  // file's `forcedOn` list is this page's override. Only a parked entry can be
+  // switched here — for an entry the file says is on there is nothing this page
+  // could write that would mean "off".
   for (const server of localServers) {
     if (ownerOf.get(server.serverName) !== 'local') continue
     const own = ownEntries.get(server.serverName)
+    const inFile = server.enabled !== false
+    const forced = forcedOn.has(server.serverName)
     push({
       id: own === undefined ? `local:${server.serverName}` : own.id,
       serverName: server.serverName,
       source: 'local',
       transport: server.transport,
-      // the file's own `enabled` is the default; the state file's `disabled`
-      // list is the runtime override, exactly as it is for composed rows — this
-      // page never writes the local file, so a toggle lands there. `forcedOn`
-      // carries the one override a suppression list cannot express: switching on
-      // an entry the file itself parks with `"enabled": false`.
-      enabledInFile: server.enabled !== false,
-      enabledForced: forcedOn.has(server.serverName),
-      enabled: forcedOn.has(server.serverName)
-        || (server.enabled !== false && !disabled.has(server.serverName)),
+      enabledInFile: inFile,
+      enabledForced: forced,
+      switchable: !inFile,
+      enabled: forced || inFile,
       live: own !== undefined && own.live,
       toolCount: toolsOfServer(schemas, server.serverName).length,
       command: server.command,
@@ -769,38 +738,17 @@ function listServers(loader, state, schemas, local) {
     })
   }
 
-  // 3) servers added on this page
-  for (const server of userServers) {
-    if (ownerOf.get(server.serverName) !== 'user') continue
-    const own = ownEntries.get(server.serverName)
-    push({
-      id: own === undefined ? MANAGED_ENTRY_PREFIX + server.serverName : own.id,
-      serverName: server.serverName,
-      source: 'user',
-      transport: server.transport,
-      enabledInFile: true,
-      enabled: server.enabled !== false,
-      live: own !== undefined && own.live,
-      toolCount: toolsOfServer(schemas, server.serverName).length,
-      command: server.command,
-      args: server.args,
-      env: server.env,
-      cwd: server.cwd,
-      url: server.url,
-      headers: server.headers,
-      toolCallTimeoutMs: server.toolCallTimeoutMs,
-    })
-  }
-
-  // 4) a mounted entry with no declaring row left (state edited by hand) is still
-  // reported, so a live server can never become invisible
+  // 3) our own mount whose entry the file no longer declares (edited by hand
+  // while dsh was running) is still reported, so a live server cannot vanish
   for (const entry of ownEntries.values()) {
     push({
       id: entry.id,
       serverName: entry.config.serverName,
-      source: 'user',
+      source: 'local',
       transport: entry.config.transport === 'streamable-http' ? 'streamable-http' : 'stdio',
       enabledInFile: true,
+      enabledForced: false,
+      switchable: false,
       enabled: true,
       live: entry.live,
       toolCount: toolsOfServer(schemas, entry.config.serverName).length,
@@ -819,138 +767,24 @@ function listServers(loader, state, schemas, local) {
 }
 
 /**
- * Every server that should be mounted, deduplicated by name and in the same
- * precedence order as {@link listServers}: composed rows already exist in the
- * loader, so only local and user rows are returned here — with `source` so the
- * caller knows which ones it owns and may unmount.
+ * Every server this plugin should mount: the hand-written file's entries that are
+ * on, where "on" is the file's own `enabled` unless this page forced the name on
+ * through `forcedOn`.
  *
- * `disabled` (the state file's runtime override) is honoured for local rows too,
- * which is what makes a hand-written server toggleable from the page — including
- * one the file parks with `"enabled": false`, which `forcedOn` switches back on.
+ * Composed and foreign rows are not returned — they are already mounted by their
+ * own layer, and `dsh-mcp-client` rejects a duplicate `serverName`. The caller
+ * skips names another layer declares for the same reason.
+ *
+ * @returns copies tagged with `source: 'local'`.
  */
 function mountableServers(state, local) {
   const out = []
-  const seen = new Set()
-  const disabled = new Set(Array.isArray(state?.disabled) ? state.disabled : [])
   const forcedOn = new Set(Array.isArray(state?.forcedOn) ? state.forcedOn : [])
-  for (const [source, list] of [['local', local?.servers], ['user', state?.servers]]) {
-    for (const server of Array.isArray(list) ? list : []) {
-      // `forcedOn` is about the hand-written file only: a page-added row carries
-      // its own `enabled` field, and the page writes that one directly.
-      const forced = source === 'local' && forcedOn.has(server.serverName)
-      if (server.enabled === false && !forced) continue
-      if (disabled.has(server.serverName) && !forced) continue
-      if (seen.has(server.serverName)) continue
-      seen.add(server.serverName)
-      out.push({ ...server, source })
-    }
+  for (const server of Array.isArray(local?.servers) ? local.servers : []) {
+    if (server.enabled === false && !forcedOn.has(server.serverName)) continue
+    out.push({ ...server, source: 'local' })
   }
   return out
-}
-
-/**
- * Servers this plugin's own state declares that the hand-written file also
- * declares. The local file wins, so these state entries are dead weight — and
- * they are what makes the page show a duplicate-name notice. Dropping them is
- * the fix the user actually wants when they move a server into the local file.
- *
- * @returns `{ servers, removed }` — the surviving state servers and the names dropped.
- */
-function pruneShadowedStateServers(state, local) {
-  const localNames = new Set((local?.servers ?? []).map((server) => server.serverName))
-  const servers = (state?.servers ?? []).filter((server) => !localNames.has(server.serverName))
-  const removed = (state?.servers ?? [])
-    .filter((server) => localNames.has(server.serverName))
-    .map((server) => server.serverName)
-  return { servers, removed }
-}
-
-/**
- * Other dsh MCP managers whose state files we know how to read.
- *
- * Needed because a runtime mount lives only in the plugin that created it: when
- * that plugin is disabled its cleanup removes the loader entries, and nothing
- * in dsh's own configuration brings them back. Importing copies the server
- * definitions into this plugin's state so this plugin owns the mounts instead.
- *
- * Every plugin keeps user-added servers in a different shape, so each entry
- * pairs a file with a translator to this plugin's `validateServerInput` input.
- */
-const IMPORT_SOURCES = [
-  {
-    id: 'dsh-skills-mcp-group-manager',
-    label: 'Skills & MCPs Group Manager',
-    file: () => join(dshHome(), 'mcp-skill-manager', 'state.json'),
-    // { groups, mcp: [{ serverName, transport, command|url, args, env, enabled, addedByUser }] }
-    extract: (raw) => (Array.isArray(raw?.mcp) ? raw.mcp : [])
-      .filter((server) => isPlainObject(server) && server.addedByUser === true)
-      .map((server) => ({
-        serverName: server.serverName,
-        transport: server.transport,
-        command: server.command,
-        args: server.args,
-        env: server.env,
-        url: server.url,
-        toolCallTimeoutMs: server.toolCallTimeoutMs,
-        enabled: server.enabled !== false,
-      })),
-  },
-]
-
-/**
- * Read every known foreign state file and report what could be imported.
- *
- * Read-only: nothing is written and nothing is mounted here. `conflict`
- * distinguishes the two reasons a candidate cannot come over as-is —
- * `already-managed` (we own a server of that name) versus `name-taken` (one is
- * already mounted under that name by a composition layer or another plugin,
- * and dsh-mcp-client rejects a duplicate `serverName`).
- *
- * @param options.exclude - serverNames that must be skipped (already ours).
- * @param options.takenByOthers - serverNames already mounted by someone else.
- */
-async function readImportCandidates({ exclude = [], takenByOthers = [] } = {}) {
-  const mine = new Set(exclude)
-  const taken = new Set(takenByOthers)
-  const sources = []
-  for (const source of IMPORT_SOURCES) {
-    let file
-    try { file = source.file() } catch { file = '' }
-    const entry = { id: source.id, label: source.label, file, available: false, error: undefined, candidates: [] }
-    let raw
-    try {
-      raw = JSON.parse(await fsP.readFile(file, 'utf8'))
-      entry.available = true
-    } catch (error) {
-      entry.error = error?.code === 'ENOENT' ? 'not installed / no state file' : String(error?.message ?? error)
-      sources.push(entry)
-      continue
-    }
-    let extracted = []
-    try { extracted = source.extract(raw) } catch (error) {
-      entry.error = String(error?.message ?? error)
-      sources.push(entry)
-      continue
-    }
-    for (const candidate of extracted) {
-      const row = { ...candidate }
-      try {
-        const config = validateServerInput(candidate)
-        row.config = config
-        row.serverName = config.serverName
-        row.transport = config.transport
-      } catch (error) {
-        row.invalid = String(error?.message ?? error)
-        entry.candidates.push(row)
-        continue
-      }
-      if (mine.has(row.serverName)) row.conflict = 'already-managed'
-      else if (taken.has(row.serverName)) row.conflict = 'name-taken'
-      entry.candidates.push(row)
-    }
-    sources.push(entry)
-  }
-  return sources
 }
 
 module.exports = {
@@ -958,8 +792,6 @@ module.exports = {
   MANAGED_ENTRY_PREFIX,
   SERVER_NAME_RE,
   JS_ENV_RE,
-  STATE_VERSION,
-  IMPORT_SOURCES,
   dshHome,
   stateDir,
   stateFile,
@@ -971,18 +803,14 @@ module.exports = {
   normalizeStringMap,
   mcpClientConfig,
   reviveJsValues,
-  configuredServers,
   loaderServers,
   entryOwner,
   mountedBy,
-  readImportCandidates,
   readLocalConfig,
   parseJsonc,
   toolsOfServer,
-  denyNamesForDisabled,
   listServers,
   mountableServers,
-  pruneShadowedStateServers,
   publicServer,
   __internals: { emptyState, isPlainObject, envRefName },
 }

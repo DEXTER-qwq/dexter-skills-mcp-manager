@@ -70,9 +70,10 @@ async function writeSkill(base, rel, meta) {
 test('plugin exports the host-plane contract (local-only surface)', () => {
   assert.equal(plugin.name, 'skills-management')
   // 技能面只依赖 skills / webServer / settings。
-  // agents / tools / loader 是 MCP 管理需要的（per-agent restrict、动态挂载）——
-  // 别和原版那批 agents/agentDefaultModel/sessions 混为一谈，那些是 share/run 的。
-  assert.deepEqual(plugin.inject, ['skills', 'webServer', 'settings', 'agents', 'tools', 'loader'])
+  // tools / loader 是 MCP 管理需要的：读 loader 里的 dsh-mcp-client 条目、把
+  // 手写配置里的 server 挂上去。原版那批 agents/agentDefaultModel/sessions
+  // （share/run 用）没有回来，per-agent 的 tools.restrict 遮蔽层也已删除。
+  assert.deepEqual(plugin.inject, ['skills', 'webServer', 'settings', 'tools', 'loader'])
 })
 
 test('host source touches no child process and no network, and no runtime deps', async () => {
