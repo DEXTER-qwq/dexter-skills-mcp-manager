@@ -1,8 +1,8 @@
-# @weibaohui/skills-management（本地版 / local-only fork）
+# dsh-skills-mcp-manager（技能管理 + MCP 管理 / 本地版）
 
-DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有 coding agent 的技能目录（Claude Code、ZCode、Codex、WorkBuddy 等十余个执行器），可预览、一键收编进 DSH 用户库供 `skill` 工具调用；同级还有「MCP 管理」，用来查看、开关、增删 dsh 的 MCP server。
+DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有 coding agent 的技能目录（Claude Code、ZCode、Codex、WorkBuddy 等十余个执行器），可预览、一键收编进 DSH 用户库供 `skill` 工具调用；同级还有「MCP 管理」，用来列出 loader 与手写配置 `mcp.local.jsonc` 里的 MCP server 并说明每条归谁管。
 
-> 这是上游 `@weibaohui/skills-management@0.6.1` 的**本地化改造版**：已移除「ntd 技能市场（git 仓库同步）」与「分享到 GitCode 官方仓库」两条**联网 / 起子进程**的功能链。运行期第三方依赖为 0、不发任何网络请求、不 spawn 任何子进程。
+> 从上游 `@weibaohui/skills-management@0.6.1` 改造而来（本包与上游**没有任何发布关系**，`private: true`，只在本机以 `link:` 安装）：已移除「ntd 技能市场（git 仓库同步）」与「分享到 GitCode 官方仓库」两条**联网 / 起子进程**的功能链，并把 MCP 面板改成以手写配置为主。运行期第三方依赖为 0、不发任何网络请求、不 spawn 任何子进程。
 
 📄 **可交互说明页**：浏览器打开 [`docs/overview.html`](docs/overview.html) —— 改造全过程、功能清单（可筛选）、工作原理、HTTP 接口（可逐条展开）、安全审计结论、验证方式与安装步骤。纯静态、离线、无外链。
 
@@ -143,7 +143,9 @@ MCP 路由没有任何 profile 参数：作用对象就是运行中的这个 dsh
 
 ## 自写 MCP 状态存储
 
-`src/mcp-manager.js` 只写一个文件：`$DSH_HOME/skills-management/mcp.json`（原子写 + 串行化，损坏或缺席都当空状态）。它存三件事：被停用的 `serverName` 列表（`disabled`）、被本页强制开启的手写条目（`forcedOn`），以及本页新增的 server（含 `enabled`）。读取侧对结构不符的条目一律丢弃而不是修补，因为半个理解的条目比缺一条更糟。19 条测试覆盖存储往返、原子性、损坏降级、校验、`!!js` 解析，以及用假 loader/tools/agents 跑完整的增删改流程——包括「deny 集合没变就不重复 restrict」这条防止无限递归的守卫。
+`src/mcp-manager.js` 只写一个文件：`$DSH_HOME/skills-management/mcp.json`（原子写 + 串行化，损坏或缺席都当空状态）。它只存一件事：被本页强制开启的手写条目（`forcedOn`）。旧版本的 `version` / `disabled` / `servers` 读取时被忽略并在有内容时给出提示。读取侧对结构不符的条目一律丢弃而不是修补，因为半个理解的条目比缺一条更糟。35 条测试覆盖存储往返、原子性、损坏降级、旧格式忽略、JSONC 解析、手写配置的各种形状、输入校验、`!!js` 解析、loader 纯逻辑，以及用假 loader/tools 跑完整的开关流程（含「手写文件字节不变」与「写着开的行必须 409」两条边界）。
+
+> 状态目录仍沿用 `~/.dsh/skills-management/`（插件改名前就在用），改名不会搬动你的 `mcp.json` 与 `mcp.local.jsonc`。
 
 ## 安装 / 使用
 
@@ -171,10 +173,12 @@ dsh plugin --profile desktop add "D:\11dsh\skills-management"
 验证装上了：
 
 ```bash
-dsh plugin why @weibaohui/skills-management      # 应显示 link:D:\11dsh\skills-management
+dsh plugin why dsh-skills-mcp-manager      # 应显示 link:D:\11dsh\skills-management
 ```
 
-然后打开 Web UI → **设置** → 左侧「技能管理」。卸载：`dsh plugin remove @weibaohui/skills-management`。
+然后打开 Web UI → **设置** → 左侧「技能管理」。卸载：`dsh plugin remove dsh-skills-mcp-manager`。
+
+> **改过包名的话**（本 fork 从 `@weibaohui/skills-management` 改名为 `dsh-skills-mcp-manager`，版本 0.7.0-local → 0.8.0-local）：profile 里记的是**旧包名**，所以要重新注册一次 —— 先 `dsh plugin remove @weibaohui/skills-management`（按 profile 里记的旧名字删），再 `dsh plugin add "D:\11dsh\skills-management"`，然后重启 DSH。顺带看一眼 `~/.dsh/profiles/desktop/cordis.patch.yml`：如果里面有 `id: skills-management` 的残留行（插件市场开关写过的），删掉它。
 
 设置页侧栏里会出现**两个**同级条目：
 
@@ -213,6 +217,6 @@ MCP 相关的测试全部用临时 `DSH_HOME` 和假 loader/tools，不会碰你
 | `test/ui.test.mjs` | 客户端面测试（含「无市场/分享残留 + 无已删功能文案 + bundle 新鲜度」守卫） |
 | `docs/overview.html` | 可交互说明页（静态、离线；浏览器直接打开） |
 
-## 许可
+## 许可与来源
 
-MIT（沿用上游许可）。上游仓库：<https://github.com/weibaohui/skills-management>
+MIT（沿用上游许可）。改造自上游仓库 <https://github.com/weibaohui/skills-management>（本包已改名并与上游脱钩，不发布到任何 registry）。

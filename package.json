@@ -1,8 +1,8 @@
 {
-  "name": "@weibaohui/skills-management",
-  "version": "0.7.0-local",
+  "name": "dsh-skills-mcp-manager",
+  "version": "0.8.0-local",
   "private": true,
-  "description": "dsh 插件 · 技能管理（本地版）：一个页面管理本机所有 coding agent 的技能目录（Claude、ZCode、Codex 等十余个执行器），可预览、收编进 DSH 用户库供 skill 工具调用；已移除 ntd 市场仓库同步与 GitCode 分享功能，运行期无任何网络请求、无子进程、无第三方运行期依赖。",
+  "description": "dsh 插件 · 技能管理 + MCP 管理（本地版）：一个页面管理本机十余个 coding agent 的技能目录（Claude Code、ZCode、Codex、WorkBuddy 等），可预览、收编进 DSH 用户库供 skill 工具调用；另一个页面列出 loader 与手写配置 mcp.local.jsonc 里的 MCP server，按来源说明谁能开关。已移除市场同步与分享功能：运行期零第三方依赖、无网络请求、不启动子进程。",
   "license": "MIT",
   "keywords": [
     "dsh",
@@ -10,6 +10,7 @@
     "cordis",
     "plugin",
     "skills",
+    "mcp",
     "dsh-plugin"
   ],
   "main": "src/index.js",
@@ -44,13 +45,5 @@
   "dependencies": {},
   "devDependencies": {
     "@deepseek-ai/schemastery": "^3.18.1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/weibaohui/skills-management.git"
-  },
-  "homepage": "https://github.com/weibaohui/skills-management#readme",
-  "bugs": {
-    "url": "https://github.com/weibaohui/skills-management/issues"
   }
 }

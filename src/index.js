@@ -1,7 +1,7 @@
 'use strict'
 
 /**
- * dsh-plugin-skills-management — Host half (local-only fork)
+ * dsh-skills-mcp-manager — Host half (local-only fork)
  *
  * FROKED / HARDENED: the upstream package shipped two remote-touching features
  * that this fork removes outright (see README "改造说明"):
@@ -663,7 +663,7 @@ function mcpErrorStatus(error) {
 }
 
 module.exports = {
-  name: 'skills-management',
+  name: 'dsh-skills-mcp-manager',
   inject: ['skills', 'webServer', 'settings', 'tools', 'loader'],
   __internals: { extractFrontmatter, parseSkillMd, parseFrontmatterMeta, invocationPolicy, installDirName, EXECUTOR_DEFS, usageStat, usageMemo, setTokenEncoder: (v) => { tokenEncoderOverride = v } },
 
