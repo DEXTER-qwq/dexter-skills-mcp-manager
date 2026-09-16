@@ -74,7 +74,7 @@ test('plugin exports the host-plane contract (local-only surface)', () => {
   assert.deepEqual(plugin.inject, ['skills', 'webServer', 'settings'])
 })
 
-test('host source touches no child process and no network', async () => {
+test('host source touches no child process and no network, and no runtime deps', async () => {
   const src = await readFile(new URL('../src/index.js', import.meta.url), 'utf8')
   for (const banned of [
     "require('node:child_process')", 'execFile', 'spawn(', 'createShareRunJob', 'dsh-plugin-kit',
@@ -83,6 +83,22 @@ test('host source touches no child process and no network', async () => {
   ]) {
     assert.ok(!src.includes(banned), `host source must not reference ${banned}`)
   }
+  // 运行期第三方依赖为零：剥掉注释后，除 node: 内置模块与 dsh 官方 schemastery
+  // （仅 settings schema 用，缺失时 register 跳过）外不该有别的裸 require
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').map((l) => {
+      const at = l.indexOf('//')
+      return at === -1 || l[at - 1] === ':' ? l : l.slice(0, at)
+    }).join('\n')
+  const bare = [...code.matchAll(/require\('([^']+)'\)/g)].map((m) => m[1])
+    .filter((id) => !id.startsWith('node:') && !id.startsWith('.') && !id.startsWith('@deepseek-ai/'))
+  assert.deepEqual(bare, [], `host source must only require node: builtins, saw ${bare.join(', ')}`)
+  assert.ok(code.includes("require('@deepseek-ai/schemastery')"), 'schemastery fallback stays the only non-builtin require')
+})
+
+test('package.json declares no runtime dependencies', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.deepEqual(pkg.dependencies ?? {}, {}, 'runtime dependencies must stay empty')
 })
 
 test('extractFrontmatter requires standalone delimiters', () => {
@@ -106,6 +122,64 @@ test('parseSkillMd tolerates malformed frontmatter and missing frontmatter', () 
   const plain = parseSkillMd('# just a body')
   assert.deepEqual(plain.meta, {})
   assert.equal(plain.body, '# just a body')
+})
+
+// ── Frontmatter reader (dependency-free; replaces the `yaml` package) ──
+
+test('frontmatter reader handles the shapes real SKILL.md files use', () => {
+  const { parseFrontmatterMeta } = plugin.__internals
+  // plain scalars, as shipped by claude/codex/dsh skills
+  assert.deepEqual(
+    parseFrontmatterMeta('name: ida-batch-export\ndescription: Use this skill when the user wants X.'),
+    { name: 'ida-batch-export', description: 'Use this skill when the user wants X.' })
+  // quoted scalars keep colons and quotes; a quoted bool stays a string
+  assert.deepEqual(
+    parseFrontmatterMeta('name: "a-b"\ndescription: "Use this: when x: y"\nuser-invocable: "false"'),
+    { name: 'a-b', description: 'Use this: when x: y', 'user-invocable': 'false' })
+  assert.deepEqual(parseFrontmatterMeta("description: 'it''s fine'"), { description: "it's fine" })
+  // bare bools coerce (flagValue reads both forms)
+  assert.deepEqual(parseFrontmatterMeta('disable-model-invocation: true'), { 'disable-model-invocation': true })
+  assert.deepEqual(parseFrontmatterMeta('disable-model-invocation: yes'), { 'disable-model-invocation': 'yes' })
+  // one level of nesting (codex metadata:) is flattened so the leaf is readable
+  assert.deepEqual(
+    parseFrontmatterMeta('name: a\nmetadata:\n  short-description: short one'),
+    { name: 'a', metadata: { 'short-description': 'short one' }, 'short-description': 'short one' })
+  // arrays, inline and block
+  assert.deepEqual(parseFrontmatterMeta('keywords: [x, "y z", 3]'), { keywords: ['x', 'y z', '3'] })
+  assert.deepEqual(parseFrontmatterMeta('keywords:\n  - x\n  - y'), { keywords: ['x', 'y'] })
+  // numbers stay strings, so `version: 1.0` renders as authored
+  assert.deepEqual(parseFrontmatterMeta('version: 1.0'), { version: '1.0' })
+  // null-ish scalars
+  assert.deepEqual(parseFrontmatterMeta('author: ~\nlicense: null'), { author: null, license: null })
+})
+
+test('frontmatter reader never lets junk corrupt name/description', () => {
+  const { parseFrontmatterMeta } = plugin.__internals
+  // comments (line-level and trailing), while '#' inside a value survives
+  assert.deepEqual(
+    parseFrontmatterMeta('# lead\nname: a # trailing\n# mid\ndescription: issue #123 fix'),
+    { name: 'a', description: 'issue #123 fix' })
+  assert.deepEqual(parseFrontmatterMeta('description: see https://x/y#frag ok'), { description: 'see https://x/y#frag ok' })
+  // block scalars fold into one string
+  assert.deepEqual(parseFrontmatterMeta('description: |\n  one\n  two'), { description: 'one\ntwo' })
+  assert.deepEqual(parseFrontmatterMeta('description: >\n  one\n  two'), { description: 'one two' })
+  // unsupported constructs are skipped, not guessed at
+  assert.deepEqual(parseFrontmatterMeta('name: a\nmetadata: {k: v}'), { name: 'a' })
+  assert.deepEqual(parseFrontmatterMeta('name: a\nx: &anchor 5\ny: *anchor'), { name: 'a' })
+  assert.deepEqual(parseFrontmatterMeta('name:a'), {}) // YAML needs the space
+  assert.deepEqual(parseFrontmatterMeta(''), {})
+  assert.deepEqual(parseFrontmatterMeta('   '), {})
+  // CRLF and unicode round-trip
+  assert.deepEqual(parseFrontmatterMeta('name: 自动续跑\r\ndescription: 会话结束后自动继续执行'), { name: '自动续跑', description: '会话结束后自动继续执行' })
+  // an unclosed inline array degrades to a plain string rather than eating the file
+  assert.deepEqual(parseFrontmatterMeta('name: [unclosed'), { name: '[unclosed' })
+})
+
+test('frontmatter reader keeps nested keys from clobbering top-level ones', () => {
+  const { parseFrontmatterMeta } = plugin.__internals
+  assert.deepEqual(
+    parseFrontmatterMeta('name: a\nmetadata:\n  name: nested-name\n  k: v'),
+    { name: 'a', metadata: { name: 'nested-name', k: 'v' }, k: 'v' })
 })
 
 test('invocationPolicy accepts booleans and string forms, defaults permit both', () => {
@@ -606,7 +680,7 @@ test('GET /api lists only the local library', async () => {
     assert.equal(list.payload.sources, undefined)
     const inst = list.payload.installed.find((s) => s.name === 'beta')
     assert.equal(inst.chars, 'beta\nInstalled skill here'.length)
-    assert.equal(typeof inst.tokens, 'number')
+    assert.equal(inst.tokens, undefined)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -665,43 +739,55 @@ test('PUT /invocation also covers the user-agents root (~/.agents/skills)', asyn
   }
 })
 
-// ── 注入开销估算（≈token / 字符）─────────────────────────────────────────
+// ── 注入开销估算（字符数；token 为可选注入）───────────────────────────────
 
-test('usageStat golden values on the cl100k_base ranks (tiktokenizer 同词表同值)', () => {
+test('usageStat reports exact char counts of the untruncated name+description', () => {
   const { usageStat } = plugin.__internals
-  // golden 值已与 tiktokenizer（cl100k_base）人工核对
-  assert.deepEqual(usageStat('hello', 'hello world'), { tokens: 4, chars: 17 })
-  assert.deepEqual(usageStat('自动续跑', '会话结束后自动继续执行，直到任务完成或达到上限'), { tokens: 28, chars: 28 })
-  assert.deepEqual(usageStat('x', ''), { tokens: 2, chars: 2 })
+  assert.deepEqual(usageStat('hello', 'hello world'), { chars: 17 })
+  assert.deepEqual(usageStat('自动续跑', '会话结束后自动继续执行，直到任务完成或达到上限'), { chars: 28 })
+  assert.deepEqual(usageStat('x', ''), { chars: 2 })
   // 非字符串 description 容错
-  assert.deepEqual(usageStat('x', undefined), { tokens: 2, chars: 2 })
+  assert.deepEqual(usageStat('x', undefined), { chars: 2 })
+  assert.deepEqual(usageStat(undefined, 'body'), { chars: 5 })
+  // 无第三方词表 ⇒ 不带 tokens 字段（客户端据此只渲染字符数）
+  assert.equal(usageStat('hello', 'hello world').tokens, undefined)
 })
 
-test('usageStat memoizes per text so rescans skip re-encoding', () => {
-  const { usageStat, usageMemo } = plugin.__internals
-  const text = 'memo-probe\na repeated description for the memo probe'
-  usageMemo.delete(text)
-  const before = usageMemo.size
-  const first = usageStat('memo-probe', 'a repeated description for the memo probe')
-  assert.equal(usageMemo.size, before + 1)
-  const again = usageStat('memo-probe', 'a repeated description for the memo probe')
-  assert.equal(usageMemo.size, before + 1)
-  assert.equal(again.tokens, first.tokens)
+test('usageStat accepts an injected token encoder and memoizes per text', () => {
+  const { usageStat, usageMemo, setTokenEncoder } = plugin.__internals
+  let calls = 0
+  setTokenEncoder({ encode: (text) => { calls += 1; return text.split(/\s+/).filter(Boolean) } })
+  try {
+    const text = 'memo-probe\na repeated description for the memo probe'
+    usageMemo.delete(text)
+    const first = usageStat('memo-probe', 'a repeated description for the memo probe')
+    assert.equal(typeof first.tokens, 'number')
+    assert.equal(first.chars, text.length)
+    const afterFirst = calls
+    const again = usageStat('memo-probe', 'a repeated description for the memo probe')
+    assert.equal(again.tokens, first.tokens)
+    assert.equal(calls, afterFirst, 'second call must hit the memo, not the encoder')
+  } finally {
+    setTokenEncoder(undefined)
+    usageMemo.clear()
+  }
 })
 
-test('usageStat degrades to chars-only when the ranks are unavailable', () => {
-  const { usageStat, setUsageEncoderOverride } = plugin.__internals
-  setUsageEncoderOverride(null)
+test('usageStat degrades to chars-only when the encoder throws or is absent', () => {
+  const { usageStat, setTokenEncoder } = plugin.__internals
+  setTokenEncoder({ encode: () => { throw new Error('no ranks') } })
   try {
     const stat = usageStat('fallback', 'no encoder here')
     assert.equal(stat.tokens, undefined)
     assert.equal(stat.chars, 'fallback\nno encoder here'.length)
   } finally {
-    setUsageEncoderOverride(undefined)
+    setTokenEncoder(undefined)
   }
+  // 默认（未注入）同样只有字符数
+  assert.equal(usageStat('plain', 'x').tokens, undefined)
 })
 
-test('executor drill-in rows carry tokens/chars', async () => {
+test('executor drill-in rows carry char usage', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-skills-usage-ex-'))
   try {
     await writeSkill(join(root, 'cc'), 'foo', { name: 'foo', description: 'Executor skill desc' })
@@ -712,8 +798,8 @@ test('executor drill-in rows carry tokens/chars', async () => {
     const scoped = await env.call('GET', '/skills-management/api/executors?executor=claudecode')
     assert.equal(scoped.status, 200)
     const foo = scoped.payload.executor.skills.find((s) => s.name === 'foo')
-    assert.equal(typeof foo.tokens, 'number')
     assert.equal(foo.chars, 'foo\nExecutor skill desc'.length)
+    assert.equal(foo.tokens, undefined, 'no encoder installed ⇒ no token field')
   } finally {
     await rm(root, { recursive: true, force: true })
   }

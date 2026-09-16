@@ -58,7 +58,27 @@ PUT    /skills-management/api/invocation            # {name, modelInvocable}
 3. **供应链面**
    `yaml` + `js-tiktoken` 是常规 npm 包；`@weibaohui/dsh-plugin-kit` 同样是作者自有包，代码已读（101 行，就是 spawn / 会话执行器）。风险点是「插件通过 `dsh plugin add` 直接取得与本机同等权限」，而非包内藏毒。
 
-以上第 1、2 点已在本次改造中**整体删除**（而非加开关），第 3 点的第三方 kit 依赖也已移除。
+以上第 1、2 点已在本次改造中**整体删除**（而非加开关）。第 3 点的三个第三方包**全部移除**：
+
+- `@weibaohui/dsh-plugin-kit` → 随分享功能删除；
+- `yaml` → 换成自写的 frontmatter 读取器（见下），**不再把不受信任技能目录里的内容交给通用 YAML 解析器**；
+- `js-tiktoken` → 注入开销统计只保留精确字符数（token 数本来就是近似值）。
+
+**现在运行期第三方依赖为 0**：宿主端只 `require('node:…')`，加上一个可选的 `@deepseek-ai/schemastery`（dsh 官方包，仅供 settings schema 注册，缺失时自动跳过注册）。`test/skills.test.mjs` 有断言守着这一点。
+
+## 自写 frontmatter 读取器
+
+`src/index.js` 里的 `parseFrontmatterMeta()` **不是** YAML 实现，只认 SKILL.md frontmatter 实际出现的形状：扁平标量、单/双引号标量、内联数组 `[a, b]`、块序列 `- item`、一层嵌套映射（Codex 的 `metadata: / short-description:`）、块标量 `|` / `>`。锚点别名、流式映射 `{a: b}`、复杂键等构造**直接跳过**，绝不影响 `name` / `description`。
+
+行为要点（都有测试）：
+
+- 只对**未加引号**的标量做类型推断：`disable-model-invocation: true` → 布尔 `true`；而 `user-invocable: "false"` 保持字符串 `'false'`（`flagValue` 读的就是字符串形式）。
+- 数字保持字符串，`version: 1.0` 按作者写的样子渲染。
+- `#` 只有「前面是空白、后面也是空白或行尾」才算注释，所以 `description: issue #123 fix` 与 `https://x/y#frag` 都完整保留。
+- 嵌套叶子会被扁平化：`metadata.short-description` 同时可按 `short-description` 读到（对未用此字段的旧读取面是纯增量）。
+- 畸形输入不抛错：无法解析的行跳过，文件正文（frontmatter 之后的内容）始终原样返回。
+
+验收方式：拿本机 10 个真实 SKILL.md（claude / agents / codex / dsh preset）与 `yaml.parse` 做差分，`name` / `description` / `version` / `author` / `license` / `whenToUse` / 正文**逐字节一致**；另有 25 条构造用例（引号、冒号、注释、块标量、CRLF、unicode、畸形数组…）。
 
 ## 安装 / 使用
 
@@ -76,9 +96,9 @@ dsh plugin --profile web add <本目录绝对路径> -w
 ## 开发
 
 ```bash
-npm install                # yaml + js-tiktoken（devDeps: @deepseek-ai/schemastery）
+npm install                # 只装 devDeps（@deepseek-ai/schemastery）；运行期依赖为空
 npm run check              # 语法检查
-npm test                   # node --test（宿主面 28 + 客户端面 13）
+npm test                   # node --test（宿主面 32 + 客户端面 13）
 npm run build:client       # 由 client/index.js 生成 client/bundle.js
 ```
 
@@ -87,7 +107,18 @@ npm run build:client       # 由 client/index.js 生成 client/bundle.js
 
 `client/bundle.js` 是构建产物，改完 `client/index.js` 必须重新 `build:client`（`test/ui.test.mjs` 有一条「bundle 是否为最新构建」的断言守着）。
 
-当前依赖已按 `package-lock.json` 锁定；卸载/重装请使用 `npm ci`。
+依赖已按 `package-lock.json` 锁定；卸载/重装请使用 `npm ci`。
+
+## 相关文件
+
+| 文件 | 作用 |
+| --- | --- |
+| `src/index.js` | 宿主端：执行器扫描、本地 API、skill provider、frontmatter 读取器 |
+| `client/index.js` | 客户端 React 源码：设置区页面 + composer「＋技能」按钮 |
+| `client/bundle.js` | 构建产物（`npm run build:client` 生成，勿手改） |
+| `cordis.patch.yml` | 插件接入宿主 composition 的 insert 行 |
+| `test/skills.test.mjs` | 宿主面测试（含「无子进程/无网络/无第三方 require」守卫） |
+| `test/ui.test.mjs` | 客户端面测试（含「无市场/分享残留 + bundle 新鲜度」守卫） |
 
 ## 许可
 

@@ -25,7 +25,6 @@ const { randomUUID } = require('node:crypto')
 const fsP = require('node:fs/promises')
 const { basename, join, relative, resolve, sep } = require('node:path')
 const { homedir } = require('node:os')
-const YAML = require('yaml')
 // settings 服务要求 schemastery schema（可调用 + toJSON；zod 不兼容，register 会抛错被吞）。
 // 宿主沙箱内解析打包依赖可能抛 ERR_INTERNAL_ASSERTION（.pnpm 软链），因此优先沿
 // dsh 全局安装取 settings 服务自用的那份副本，本地开发/测试再退回标准 require。
@@ -106,14 +105,217 @@ function extractFrontmatter(content) {
   return undefined
 }
 
+// ── Frontmatter reader (no YAML dependency) ─────────────────────────────
+// 这里**不是** YAML 实现,只认 SKILL.md frontmatter 实际出现的形状:
+//   扁平标量(name/description/version/author/license/whenToUse/disable-model-invocation…)、
+//   单/双引号标量、内联数组 [a, b]、块序列(- item)、以及一层嵌套映射
+//   (Codex 的 metadata:/short-description:)。锚点别名、多行标量(| >)、
+//   流式映射({a: b})、复杂键等构造一律**忽略**,绝不让它影响 name/description。
+// 这样运行期第三方依赖为零,且不把不受信任的技能目录内容交给通用 YAML 解析器。
+//
+// 返回扁平化的 meta:顶层键 + 嵌套键(键名与叶子名),与旧 YAML.parse 的
+// 读取面兼容——调用方只按字符串/数组/布尔取值,不做结构遍历。
+
+function unquoteScalar(raw) {
+  const text = raw.trim()
+  if (text.length === 0) return ''
+  if (text[0] === '"') {
+    const end = text.lastIndexOf('"')
+    if (end > 0) {
+      try { return JSON.parse(text.slice(0, end + 1)) } catch { return text.slice(1, end) }
+    }
+    return text.slice(1)
+  }
+  if (text[0] === "'") {
+    const end = text.lastIndexOf("'")
+    if (end > 0) return text.slice(1, end).replace(/''/g, "'")
+    return text.slice(1)
+  }
+  // A trailing comment starts at a '#' that is both preceded by whitespace and
+  // followed by whitespace or end-of-line. So `foo  # note` drops the note,
+  // while `issue #123 fix` and `https://x/y#frag` keep their text.
+  let quote = null
+  for (let i = 1; i < text.length; i += 1) {
+    const ch = text[i]
+    if (quote !== null) { if (ch === quote) quote = null; continue }
+    if (ch === '"' || ch === "'") { quote = ch; continue }
+    if (ch !== '#') continue
+    const before = text[i - 1]
+    const after = text[i + 1]
+    if ((before === ' ' || before === '\t') && (after === undefined || after === ' ' || after === '\t')) {
+      return text.slice(0, i).trim()
+    }
+  }
+  return text
+}
+
+/**
+ * Scalar → value. Only the types the callers branch on get real types:
+ * unquoted true/false, and ~/null as null. Everything else stays a string —
+ * numbers included, because `version: 1.0` should render as the author wrote
+ * it. **Quoted** scalars never coerce (`user-invocable: "false"` must stay the
+ * string 'false' — `flagValue` reads the string form).
+ */
+function coerceScalar(raw) {
+  const trimmedRaw = String(raw).trim()
+  const text = unquoteScalar(trimmedRaw)
+  const first = trimmedRaw[0]
+  const quoted = first === '"' || first === "'"
+  // unchanged ⇒ the value was a bare scalar, so type coercion is allowed
+  if (!quoted && text === trimmedRaw) {
+    const lowered = text.toLowerCase()
+    if (lowered === '~' || lowered === 'null') return null
+    if (lowered === 'true') return true
+    if (lowered === 'false') return false
+  }
+  return text
+}
+
+/** The first top-level ':' followed by whitespace or end-of-line. Avoids
+ *  splitting inside a quoted key, and does not special-case '#': a trailing
+ *  comment is stripped later by unquoteScalar, so a value like
+ *  `issue #123` keeps its text. */
+function splitKeyValue(text) {
+  let quote = null
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    if (quote !== null) {
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") { quote = ch; continue }
+    if (ch === ':') {
+      const next = text[i + 1]
+      if (next === undefined || next === ' ' || next === '\t') {
+        const key = text.slice(0, i).trim().replace(/^["']|["']$/g, '')
+        if (key === '') return null
+        return { key, rest: text.slice(i + 1) }
+      }
+    }
+  }
+  return null
+}
+
+/** [a, b, "c d"] → array; a malformed inline array degrades to a single string. */
+function parseInlineArray(raw) {
+  const inner = raw.slice(1, raw.lastIndexOf(']')).trim()
+  if (inner === '') return []
+  const out = []
+  let current = ''
+  let quote = null
+  for (const ch of inner) {
+    if (quote !== null) {
+      current += ch
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") { quote = ch; current += ch; continue }
+    if (ch === ',') { out.push(coerceScalar(current)); current = ''; continue }
+    current += ch
+  }
+  out.push(coerceScalar(current))
+  return out
+}
+
+/** Flatten one block level: `key: value`, `key:` + nested block, `- item`.
+ *  A pure sequence level comes back as `{ value: [...] }`. */
+function parseBlock(lines) {
+  const out = {}
+  let index = 0
+  while (index < lines.length) {
+    const line = lines[index]
+    if (line.trim() === '' || line.trim().startsWith('#')) { index += 1; continue }
+    const indent = line.length - line.trimStart().length
+    const text = line.trim()
+
+    // block sequence → collect same-or-deeper-indent "- x" items
+    if (text === '-' || text.startsWith('- ')) {
+      const items = []
+      while (index < lines.length) {
+        const cur = lines[index]
+        const curText = cur.trim()
+        if (curText === '') { index += 1; continue }
+        const curIndent = cur.length - cur.trimStart().length
+        if (curIndent < indent || !(curText === '-' || curText.startsWith('- '))) break
+        if (curIndent > indent) { index += 1; continue } // nested under an item: ignored
+        items.push(coerceScalar(curText === '-' ? '' : curText.slice(2)))
+        index += 1
+      }
+      return { value: items }
+    }
+
+    const kv = splitKeyValue(text)
+    if (kv === null) { index += 1; continue } // unsupported construct: skip the line
+    const { key, rest } = kv
+    const trimmed = rest.trim()
+
+    if (trimmed === '') {
+      // nested block: consume the deeper-indented run
+      let end = index + 1
+      while (end < lines.length) {
+        const cur = lines[end]
+        if (cur.trim() === '') { end += 1; continue }
+        if (cur.length - cur.trimStart().length <= indent) break
+        end += 1
+      }
+      const nested = parseBlock(lines.slice(index + 1, end))
+      out[key] = Object.keys(nested).length === 1 && Array.isArray(nested.value) ? nested.value : nested
+      index = end
+      continue
+    }
+    if (trimmed.startsWith('|') || trimmed.startsWith('>')) {
+      // block scalar: fold the indented run into one space-joined string
+      const parts = []
+      let end = index + 1
+      while (end < lines.length && (lines[end].trim() === '' || lines[end].length - lines[end].trimStart().length > indent)) {
+        if (lines[end].trim() !== '') parts.push(lines[end].trim())
+        end += 1
+      }
+      out[key] = parts.join(trimmed.startsWith('>') ? ' ' : '\n')
+      index = end
+      continue
+    }
+    if (trimmed.startsWith('[')) {
+      // well-formed inline array, else treat the whole thing as a plain string
+      out[key] = trimmed.endsWith(']') && !trimmed.slice(1, -1).includes('[')
+        ? parseInlineArray(trimmed)
+        : coerceScalar(trimmed)
+      index += 1
+      continue
+    }
+    if (trimmed.startsWith('{')) { index += 1; continue } // flow mapping: ignored
+    if (trimmed.startsWith('&') || trimmed.startsWith('*')) { index += 1; continue } // anchors/aliases: ignored
+    out[key] = coerceScalar(trimmed)
+    index += 1
+  }
+  return out
+}
+
+/** Flat meta view: top-level keys plus nested leaf keys (one level), so
+ *  `metadata.short-description` is readable as `short-description`. */
+function parseFrontmatterMeta(yamlText) {
+  let top
+  try { top = parseBlock(String(yamlText).split(/\r?\n/)) }
+  catch { return {} }
+  if (top === null || typeof top !== 'object' || Array.isArray(top)) return {}
+  const flat = {}
+  for (const [key, value] of Object.entries(top)) {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      flat[key] = value
+      for (const [childKey, childValue] of Object.entries(value)) {
+        if (!(childKey in flat)) flat[childKey] = childValue
+      }
+    } else {
+      flat[key] = value
+    }
+  }
+  return flat
+}
+
 function parseSkillMd(content) {
   const yamlText = extractFrontmatter(content)
   if (yamlText === undefined) return { meta: {}, body: content }
-  let meta = {}
-  try {
-    const parsed = YAML.parse(yamlText)
-    if (parsed !== null && typeof parsed === 'object') meta = parsed
-  } catch {}
+  const meta = parseFrontmatterMeta(yamlText)
   const lines = content.split(/\r?\n/)
   let closer = -1
   for (let index = 1; index < lines.length; index += 1) {
@@ -340,40 +542,52 @@ function truncateDescription(text) {
   return single.length > DESCRIPTION_LIMIT ? single.slice(0, DESCRIPTION_LIMIT) + '…' : single
 }
 
-// ── 注入开销估算（≈token / 字符）─────────────────────────────────────────
-// 技能注入模型 = 名称+描述，两个指标都按该文本统计（字符数即其长度，token 数
-// 用 js-tiktoken 的 cl100k_base 词表估算——与 tiktokenizer 同词表同值）。列表
-// 接口的 description 是截断展示，统计必须喂截断前的全文。DeepSeek 自有分词与
-// tiktoken 有差异，数值用于横向比较而非精确计费；词表加载失败时降级为只出字符数。
-let usageEncoder = null
-let usageEncoderFailed = false
-let usageEncoderOverride  // 测试注入点：undefined 走正常加载，null 强制降级
-function usageEncoderLazy() {
-  if (usageEncoderOverride !== undefined) return usageEncoderOverride
-  if (usageEncoderFailed) return null
-  if (usageEncoder === null) {
-    try {
-      const { Tiktoken } = require('js-tiktoken/lite')
-      usageEncoder = new Tiktoken(require('js-tiktoken/ranks/cl100k_base'))
-    } catch { usageEncoderFailed = true }
-  }
-  return usageEncoder
-}
+// ── 注入开销估算（字符数 + 可选 token 估算器）─────────────────────────────
+// 技能注入模型 = 名称+描述，指标取该文本的字符长度。列表接口的 description
+// 是截断展示，统计必须喂截断前的全文。
+//
+// 原版用 js-tiktoken 的 cl100k_base 词表额外估算 token 数；本 fork 移除了该
+// 依赖（运行期第三方依赖归零）。字符数是精确值，token 数在原版里也只是
+// 「与 tiktokenizer 同词表」的近似值（DeepSeek 实际分词不同），故默认不再给出。
+//
+// 想恢复 token 数：`npm i js-tiktoken`，再把下面 usageTokenEncoder() 的
+// 注释块打开即可（或者在宿主里注入一个编码器：见 __internals.setTokenEncoder，
+// 任何带 `.encode(text) → array` 的对象都可以，客户端会自动改渲染 token）。
 const USAGE_MEMO_CAP = 25000
 const usageMemo = new Map()
+let tokenEncoder
+let tokenEncoderResolved = false
+let tokenEncoderOverride // 测试/宿主注入点：undefined 走正常解析
+
+/** cl100k_base 编码器（可选依赖，缺失即静默降级为只出字符数）。 */
+function usageTokenEncoder() {
+  if (tokenEncoderOverride !== undefined) return tokenEncoderOverride
+  if (tokenEncoderResolved) return tokenEncoder
+  tokenEncoderResolved = true
+  tokenEncoder = null
+  // 需要 token 估算时打开这两行（并 npm i js-tiktoken）：
+  // try {
+  //   const { Tiktoken } = require('js-tiktoken/lite')
+  //   tokenEncoder = new Tiktoken(require('js-tiktoken/ranks/cl100k_base'))
+  // } catch { tokenEncoder = null }
+  return tokenEncoder
+}
+
 function usageStat(name, description) {
   const desc = typeof description === 'string' ? description : ''
   const text = `${name || ''}\n${desc}`
   const stat = { chars: text.length }
-  const enc = usageEncoderLazy()
-  if (enc !== null) {
+  const enc = usageTokenEncoder()
+  if (enc !== null && enc !== undefined && typeof enc.encode === 'function') {
     let tokens = usageMemo.get(text)
     if (tokens === undefined) {
-      tokens = enc.encode(text).length
-      if (usageMemo.size >= USAGE_MEMO_CAP) usageMemo.clear()
-      usageMemo.set(text, tokens)
+      try { tokens = enc.encode(text).length } catch { tokens = undefined }
+      if (tokens !== undefined) {
+        if (usageMemo.size >= USAGE_MEMO_CAP) usageMemo.clear()
+        usageMemo.set(text, tokens)
+      }
     }
-    stat.tokens = tokens
+    if (tokens !== undefined) stat.tokens = tokens
   }
   return stat
 }
@@ -437,7 +651,7 @@ function contentTypeFor(p) {
 module.exports = {
   name: 'skills-management',
   inject: ['skills', 'webServer', 'settings'],
-  __internals: { extractFrontmatter, parseSkillMd, invocationPolicy, installDirName, EXECUTOR_DEFS, usageStat, usageMemo, setUsageEncoderOverride: (v) => { usageEncoderOverride = v } },
+  __internals: { extractFrontmatter, parseSkillMd, parseFrontmatterMeta, invocationPolicy, installDirName, EXECUTOR_DEFS, usageStat, usageMemo, setTokenEncoder: (v) => { tokenEncoderOverride = v } },
 
   apply(ctx, config = {}) {
     const installedDir = resolve(expandTilde(config.installedDir !== undefined ? config.installedDir : process.env.DSH_HOME ? join(process.env.DSH_HOME, 'skills') : join(homedir(), '.dsh', 'skills')))

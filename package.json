@@ -2,7 +2,7 @@
   "name": "@weibaohui/skills-management",
   "version": "0.7.0-local",
   "private": true,
-  "description": "dsh 插件 · 技能管理（本地版）：一个页面管理本机所有 coding agent 的技能目录（Claude、ZCode、Codex 等十余个执行器），可预览、收编进 DSH 用户库供 skill 工具调用；已移除 ntd 市场仓库同步与 GitCode 分享功能，运行期无任何网络请求与子进程。",
+  "description": "dsh 插件 · 技能管理（本地版）：一个页面管理本机所有 coding agent 的技能目录（Claude、ZCode、Codex 等十余个执行器），可预览、收编进 DSH 用户库供 skill 工具调用；已移除 ntd 市场仓库同步与 GitCode 分享功能，运行期无任何网络请求、无子进程、无第三方运行期依赖。",
   "license": "MIT",
   "keywords": [
     "dsh",
@@ -40,10 +40,7 @@
     "test": "node --test test/*.test.mjs",
     "build:client": "node scripts/build-client.mjs"
   },
-  "dependencies": {
-    "js-tiktoken": "^1.0.21",
-    "yaml": "^2.9.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@deepseek-ai/schemastery": "^3.18.1"
   },
