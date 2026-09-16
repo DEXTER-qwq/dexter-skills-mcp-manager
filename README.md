@@ -54,7 +54,7 @@ DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有
 
 想给 MCP 配置写注释、把不用的条目注释掉留档,就写进 `mcp.local.jsonc`——UI 里的任何开关都不会碰这个文件。模板见 [`docs/mcp.local.example.jsonc`](docs/mcp.local.example.jsonc);改完**重启 dsh** 生效（本插件不做文件监听）。
 
-同名冲突规则:**dsh 组合 > 手写文件 > 本页新增**,只挂载优先级最高的那条(`dsh-mcp-client` 会拒绝重复的 `serverName`),一个名字在列表里只出现一行并标出「有同名声明」。手写文件里的条目在本页是**只读**的(开关返回 409)——要改就改那个文件再重启。
+同名冲突规则:**dsh 组合 > 手写文件 > 本页新增**,只挂载优先级最高的那条(`dsh-mcp-client` 会拒绝重复的 `serverName`),一个名字在列表里只出现一行并标出「有同名声明」。手写文件里的条目在本页**照样能开关**(开关只写 `mcp.json`,那个文件一个字节都不会被改)。唯一要区分的情况是条目自己写着 `"enabled": false`:抑制列表(`disabled`)没法表达「开」,所以这种「本页强制开启」另记在 `mcp.json` 的 `forcedOn` 里,页面会在那行说明它。
 
 > 要是宿主缺少 `loader` / `tools` 服务（最小组合），页面会显示「能力不可用」而不是报错，并照常列出当前状态。
 
@@ -134,7 +134,7 @@ MCP 路由没有任何 profile 参数：作用对象就是运行中的这个 dsh
 
 ## 自写 MCP 状态存储
 
-`src/mcp-manager.js` 只写一个文件：`$DSH_HOME/skills-management/mcp.json`（原子写 + 串行化，损坏或缺席都当空状态）。它存两件事：被停用的 `serverName` 列表，以及本页新增的 server（含 `enabled`）。读取侧对结构不符的条目一律丢弃而不是修补，因为半个理解的条目比缺一条更糟。19 条测试覆盖存储往返、原子性、损坏降级、校验、`!!js` 解析，以及用假 loader/tools/agents 跑完整的增删改流程——包括「deny 集合没变就不重复 restrict」这条防止无限递归的守卫。
+`src/mcp-manager.js` 只写一个文件：`$DSH_HOME/skills-management/mcp.json`（原子写 + 串行化，损坏或缺席都当空状态）。它存三件事：被停用的 `serverName` 列表（`disabled`）、被本页强制开启的手写条目（`forcedOn`），以及本页新增的 server（含 `enabled`）。读取侧对结构不符的条目一律丢弃而不是修补，因为半个理解的条目比缺一条更糟。19 条测试覆盖存储往返、原子性、损坏降级、校验、`!!js` 解析，以及用假 loader/tools/agents 跑完整的增删改流程——包括「deny 集合没变就不重复 restrict」这条防止无限递归的守卫。
 
 ## 安装 / 使用
 

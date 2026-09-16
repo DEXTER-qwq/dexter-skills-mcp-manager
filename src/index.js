@@ -696,6 +696,9 @@ module.exports = {
     }
 
     const disabledServerNames = () => (mcpStore.get().disabled ?? []).filter((n) => typeof n === 'string')
+    // Names the page switched ON even though the hand-written entry says
+    // `"enabled": false`; without this the switch on such a row would be a no-op.
+    const forcedOnServerNames = () => (mcpStore.get().forcedOn ?? []).filter((n) => typeof n === 'string')
 
     /**
      * 把「已停用」落到某个 agent 的工具目录上。
@@ -1432,26 +1435,37 @@ module.exports = {
               const serverName = body.serverName
               const row = mcpSnapshot().servers.find((server) => server.serverName === serverName)
               if (row === undefined) { sendJson(res, 404, { error: `MCP server '${serverName}' is not known` }); return }
-              // A hand-written row is toggled exactly like a composed one — the
-              // state file's `disabled` list suppresses it, and the local file
-              // (which this plugin never writes) is left untouched.
+              // A hand-written row is toggled exactly like a composed one, and the
+              // local file (which this plugin never writes) is left untouched. An
+              // entry that parks itself with `"enabled": false` is the one case the
+              // `disabled` list cannot express, because removing a name from a
+              // suppression list is not the same as switching something on — such a
+              // name is recorded in `forcedOn` instead, so the page's switch wins
+              // over the file's default without the file being rewritten.
               await withMcpLock(async () => {
                 const state = refreshMcpState()
                 const disabled = new Set(disabledServerNames())
-                if (body.enabled) disabled.delete(serverName)
-                else disabled.add(serverName)
+                const forcedOn = new Set(forcedOnServerNames())
+                if (body.enabled) {
+                  disabled.delete(serverName)
+                  if (row.source === 'local' && row.enabledInFile === false) forcedOn.add(serverName)
+                } else {
+                  disabled.add(serverName)
+                  forcedOn.delete(serverName)
+                }
                 const ownsRow = (state.servers ?? []).some((server) => server.serverName === serverName)
                 const servers = (state.servers ?? []).map((server) => (
                   server.serverName === serverName ? { ...server, enabled: body.enabled } : server))
-                await mcpStore.replace({ ...state, disabled: [...disabled], servers })
+                const nextState = { ...state, disabled: [...disabled], forcedOn: [...forcedOn], servers }
+                await mcpStore.replace(nextState)
                 // a row we own must also be mounted/unmounted for real; a local
-                // row is mounted by syncUserMcpMounts below, from the same flag
+                // row is mounted by syncUserMcpMounts below, from the same flags
                 if (ownsRow) {
                   const userServer = servers.find((server) => server.serverName === serverName)
                   if (body.enabled) await mountMcpServer(userServer)
                   else await unmountMcpServer(serverName)
                 } else if (body.enabled) {
-                  const wanted = mcpManager.mountableServers(state, mcpManager.readLocalConfig())
+                  const wanted = mcpManager.mountableServers(nextState, mcpManager.readLocalConfig())
                     .find((server) => server.serverName === serverName)
                   if (wanted !== undefined) await mountMcpServer(wanted)
                 } else {
@@ -1517,6 +1531,7 @@ module.exports = {
                 ...state,
                 servers: (state.servers ?? []).filter((server) => server.serverName !== serverName),
                 disabled: disabledServerNames().filter((name) => name !== serverName),
+                forcedOn: forcedOnServerNames().filter((name) => name !== serverName),
               })
             })
             applyMcpRestrictionsToAll()

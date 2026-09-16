@@ -254,6 +254,8 @@ window.__ModuleLoader__.load({
       mcpLocalInvalid: '手写配置里有 {n} 条不合法，已被跳过',
       mcpSourceLocal: '手写配置',
       mcpLocalRowHint: '这条来自手写配置文件。开关本页照样能用（记在本插件状态里，不改你的文件）；要改命令/参数就编辑那个文件再重启。',
+      mcpLocalParkedHint: '这条在手写配置里写了 "enabled": false。本页的开关照样能开它（只记在本插件状态里，你的文件不会被改写）。',
+      mcpLocalForcedHint: '手写配置里这条是 "enabled": false，现在是被本页开关强制开着的（只记在本插件状态里，文件没动）。',
       mcpShadowedTag: '有同名声明',
       mcpShadowedHint: '这个名字在别处也声明了。为保证不冲突，只会挂载上面这条；别处那份被忽略。删掉多余的那份可消除此提示。',
       mcpDuplicateNotice: '本插件状态里有 {n} 条已被手写配置覆盖',
@@ -419,6 +421,8 @@ window.__ModuleLoader__.load({
       mcpLocalCorrupt: 'The hand-written config cannot be parsed: {error}',
       mcpLocalInvalid: '{n} entries in the hand-written config are invalid and were skipped',
       mcpLocalRowHint: 'This row comes from the hand-written config. The toggle here still works (it is recorded in this plugin’s state, not in your file); edit the file and restart to change the command or arguments.',
+      mcpLocalParkedHint: 'This entry is parked with "enabled": false in the hand-written config. The toggle here still switches it on — that override is recorded in this plugin’s state, and your file is never rewritten.',
+      mcpLocalForcedHint: 'The hand-written config parks this entry with "enabled": false; it is on because this page switched it on. The override lives in this plugin’s state — your file was not touched.',
       mcpShadowedTag: 'duplicate name',
       mcpShadowedHint: 'This name is declared somewhere else too. Only the row above is mounted, because a duplicate serverName would break the MCP client; the other declaration is ignored.',
       mcpDuplicateNotice: '{n} entries in this plugin’s state are overridden by the hand-written config',
@@ -1519,6 +1523,10 @@ window.__ModuleLoader__.load({
       const headerCount = Object.keys(row.headers || {}).length
       const summary = isStdio ? [row.command, ...(row.args || [])].join(' ') : row.url
       const removable = row.source === 'user'
+      // the hand-written file can park an entry with "enabled": false; the page's
+      // toggle overrides that, and the row should say so
+      const parkedInFile = row.source === 'local' && row.enabledInFile === false
+      const parkedHint = row.enabledForced === true ? t('mcpLocalForcedHint') : t('mcpLocalParkedHint')
       const sourceLabel = row.source === 'user' ? t('mcpSourceUser')
         : row.source === 'foreign' ? t('mcpSourceForeign')
           : row.source === 'local' ? t('mcpSourceLocal') : t('mcpSourceConfigured')
@@ -1548,7 +1556,7 @@ window.__ModuleLoader__.load({
           : row.source === 'foreign'
             ? h('div', { style: fieldHintStyle() }, t('mcpForeignHint'))
             : row.source === 'local'
-              ? h('div', { style: fieldHintStyle() }, t('mcpLocalRowHint'))
+              ? h('div', { style: fieldHintStyle() }, parkedInFile ? parkedHint : t('mcpLocalRowHint'))
               : row.source === 'configured' && h('div', { style: fieldHintStyle() }, t('mcpConfiguredHint')),
         h('div', { className: 'sk-foot' },
           h('div', { className: 'sk-chips' }, h('span', { className: 'sk-dir' }, row.entryId)),
@@ -1687,8 +1695,7 @@ window.__ModuleLoader__.load({
           headers: { 'Content-Type': 'application/json' },
           body: '{}',
         })
-        void payload
-        onToast(t('mcpPruneDone', { n: (payload && payload.removed ? payload.removed.length : 0) }))
+        if (payload !== null) onToast(t('mcpPruneDone', { n: (payload.removed || []).length }))
       }
       const openImport = async () => {
         setBusy(true)

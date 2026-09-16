@@ -578,7 +578,7 @@ const APIS = [
   "command": "npx", "args": ["-y", "some-mcp-server"],
   "env": { "TOKEN": "\${MY_TOKEN}" }, "toolCallTimeoutMs": 60000 }`,
     res: `201 { "created": "local", "servers": [ … ] }` },
-  { m: 'PUT', p: '/api/mcp', d: '停用 / 启用', detail: 'body { serverName, enabled }。配置来源的 server 只换 restrict 遮蔽层；本页新增的还会真的卸载/重挂 loader 条目。',
+  { m: 'PUT', p: '/api/mcp', d: '停用 / 启用', detail: 'body { serverName, enabled }。配置来源的 server 只换 restrict 遮蔽层；手写文件里的条目记进状态文件的 disabled 列表（那个文件永不被改写）；本页新增的还会真的卸载/重挂 loader 条目。手写条目自己写了 "enabled": false 时，开启会记进状态文件的 forcedOn —— 抑制列表表达不了「开」。',
     req: `{ "serverName": "github", "enabled": false }` },
   { m: 'DELETE', p: '/api/mcp', d: '删除 MCP server', detail: 'body { serverName }。仅限本页新增的；配置来源的返回 409，未知的返回 404。' }
 ];

@@ -71,8 +71,21 @@ const stateFile = () => join(stateDir(), 'mcp.json')
 /** Hand-written config, one file per user: read by the plugin, NEVER written. */
 const localFile = () => join(stateDir(), 'mcp.local.jsonc')
 
-/** Empty state — also the fallback for a missing or unreadable file. */
-const emptyState = () => ({ version: STATE_VERSION, disabled: [], servers: [] })
+/**
+ * Empty state — also the fallback for a missing or unreadable file.
+ *
+ * `disabled` suppresses a row; `forcedOn` records the names the page switched
+ * back on although the hand-written entry parks itself with
+ * `"enabled": false`. Two lists are needed because a suppression list cannot
+ * express "on": removing a name from `disabled` only means "not suppressed",
+ * which for such an entry still leaves it off.
+ */
+const emptyState = () => ({ version: STATE_VERSION, disabled: [], forcedOn: [], servers: [] })
+
+/** The string-list fields of the state file, sanitised identically. */
+const nameList = (raw, field) => (Array.isArray(raw?.[field])
+  ? [...new Set(raw[field].filter((name) => typeof name === 'string' && SERVER_NAME_RE.test(name)))]
+  : [])
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -225,9 +238,8 @@ function readLocalConfig(file = localFile()) {
  */
 function normalizeState(raw) {
   if (!isPlainObject(raw)) return emptyState()
-  const disabled = Array.isArray(raw.disabled)
-    ? [...new Set(raw.disabled.filter((name) => typeof name === 'string' && SERVER_NAME_RE.test(name)))]
-    : []
+  const disabled = nameList(raw, 'disabled')
+  const forcedOn = nameList(raw, 'forcedOn')
   const servers = []
   const seen = new Set()
   if (Array.isArray(raw.servers)) {
@@ -240,7 +252,7 @@ function normalizeState(raw) {
       servers.push({ ...validated, enabled: entry.enabled !== false })
     }
   }
-  return { version: STATE_VERSION, disabled, servers }
+  return { version: STATE_VERSION, disabled, forcedOn, servers }
 }
 
 /**
@@ -603,6 +615,11 @@ function publicServer(record) {
     entryId: record.id,
     transport: record.transport,
     enabled: record.enabled,
+    // false only for a hand-written entry that parks itself with
+    // `"enabled": false`: the page can still switch it on, and says so
+    enabledInFile: record.enabledInFile !== false,
+    // true when the page switched such an entry back on, overriding the file
+    enabledForced: record.enabledForced === true,
     live: record.live === true,
     removable: record.source === 'user',
     // true when another source declares this same name: the others are ignored,
@@ -642,6 +659,7 @@ function publicServer(record) {
  */
 function listServers(loader, state, schemas, local) {
   const disabled = new Set(Array.isArray(state?.disabled) ? state.disabled : [])
+  const forcedOn = new Set(Array.isArray(state?.forcedOn) ? state.forcedOn : [])
   const userServers = Array.isArray(state?.servers) ? state.servers : []
   const localServers = Array.isArray(local?.servers) ? local.servers : []
   const rows = []
@@ -707,6 +725,7 @@ function listServers(loader, state, schemas, local) {
       source: entry.owner === 'other' ? 'foreign' : 'configured',
       ownerPlugin: entry.plugin,
       transport: entry.config.transport === 'streamable-http' ? 'streamable-http' : 'stdio',
+      enabledInFile: true,
       enabled: !disabled.has(entry.config.serverName),
       live: entry.live,
       toolCount: toolsOfServer(schemas, entry.config.serverName).length,
@@ -731,8 +750,13 @@ function listServers(loader, state, schemas, local) {
       transport: server.transport,
       // the file's own `enabled` is the default; the state file's `disabled`
       // list is the runtime override, exactly as it is for composed rows — this
-      // page never writes the local file, so a toggle lands there
-      enabled: server.enabled !== false && !disabled.has(server.serverName),
+      // page never writes the local file, so a toggle lands there. `forcedOn`
+      // carries the one override a suppression list cannot express: switching on
+      // an entry the file itself parks with `"enabled": false`.
+      enabledInFile: server.enabled !== false,
+      enabledForced: forcedOn.has(server.serverName),
+      enabled: forcedOn.has(server.serverName)
+        || (server.enabled !== false && !disabled.has(server.serverName)),
       live: own !== undefined && own.live,
       toolCount: toolsOfServer(schemas, server.serverName).length,
       command: server.command,
@@ -754,6 +778,7 @@ function listServers(loader, state, schemas, local) {
       serverName: server.serverName,
       source: 'user',
       transport: server.transport,
+      enabledInFile: true,
       enabled: server.enabled !== false,
       live: own !== undefined && own.live,
       toolCount: toolsOfServer(schemas, server.serverName).length,
@@ -775,6 +800,7 @@ function listServers(loader, state, schemas, local) {
       serverName: entry.config.serverName,
       source: 'user',
       transport: entry.config.transport === 'streamable-http' ? 'streamable-http' : 'stdio',
+      enabledInFile: true,
       enabled: true,
       live: entry.live,
       toolCount: toolsOfServer(schemas, entry.config.serverName).length,
@@ -799,16 +825,21 @@ function listServers(loader, state, schemas, local) {
  * caller knows which ones it owns and may unmount.
  *
  * `disabled` (the state file's runtime override) is honoured for local rows too,
- * which is what makes a hand-written server toggleable from the page.
+ * which is what makes a hand-written server toggleable from the page — including
+ * one the file parks with `"enabled": false`, which `forcedOn` switches back on.
  */
 function mountableServers(state, local) {
   const out = []
   const seen = new Set()
   const disabled = new Set(Array.isArray(state?.disabled) ? state.disabled : [])
+  const forcedOn = new Set(Array.isArray(state?.forcedOn) ? state.forcedOn : [])
   for (const [source, list] of [['local', local?.servers], ['user', state?.servers]]) {
     for (const server of Array.isArray(list) ? list : []) {
-      if (server.enabled === false) continue
-      if (disabled.has(server.serverName)) continue
+      // `forcedOn` is about the hand-written file only: a page-added row carries
+      // its own `enabled` field, and the page writes that one directly.
+      const forced = source === 'local' && forcedOn.has(server.serverName)
+      if (server.enabled === false && !forced) continue
+      if (disabled.has(server.serverName) && !forced) continue
       if (seen.has(server.serverName)) continue
       seen.add(server.serverName)
       out.push({ ...server, source })

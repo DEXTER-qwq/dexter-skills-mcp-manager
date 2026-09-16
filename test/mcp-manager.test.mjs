@@ -5,7 +5,7 @@
 // adding/removing mounts a real loader entry. The only file written is this
 // plugin's own state, so these tests must prove that (a) the state survives a
 // round-trip, (b) validation refuses junk, and (c) the restrict layer is
-// swapped only when the deny set really changes â€” swapping it unconditionally
+// swapped only when the deny set really changes â€?swapping it unconditionally
 // recurses through `tools/change` and wedges the process.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -39,7 +39,7 @@ test('the store round-trips state through <DSH_HOME>/skills-management/mcp.json'
   await withHome(async (home) => {
     const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
     store.loadSync()
-    assert.deepEqual(store.get(), { version: 1, disabled: [], servers: [] })
+    assert.deepEqual(store.get(), { version: 1, disabled: [], forcedOn: [], servers: [] })
     assert.equal(store.file, join(home, 'skills-management', 'mcp.json'))
 
     await store.replace({
@@ -69,11 +69,11 @@ test('a corrupt or missing state file degrades to empty instead of throwing', as
     await mkdir(dir, { recursive: true })
 
     const missing = mcpManager.createStore({ logger: { warn() {}, error() {} } })
-    assert.deepEqual(missing.loadSync(), { version: 1, disabled: [], servers: [] })
+    assert.deepEqual(missing.loadSync(), { version: 1, disabled: [], forcedOn: [], servers: [] })
 
     await writeFile(join(dir, 'mcp.json'), '{ not json')
     const broken = mcpManager.createStore({ logger: { warn() {}, error() {} } })
-    assert.deepEqual(broken.loadSync(), { version: 1, disabled: [], servers: [] })
+    assert.deepEqual(broken.loadSync(), { version: 1, disabled: [], forcedOn: [], servers: [] })
 
     // structurally wrong entries are dropped, not repaired
     await writeFile(join(dir, 'mcp.json'), JSON.stringify({
@@ -145,7 +145,7 @@ test('parseJsonc does not mistake comment-like text inside strings for syntax', 
 })
 
 test('parseJsonc reports what it cannot fix instead of guessing', () => {
-  // a lost comma cannot be told apart from two adjacent values â€” refuse it
+  // a lost comma cannot be told apart from two adjacent values â€?refuse it
   const lost = '{\n  "servers": [\n    { "a": 1 }\n    { "a": 2 }\n  ]\n}'
   const parsed = mcpManager.parseJsonc(lost)
   assert.equal(parsed.ok, false)
@@ -335,7 +335,7 @@ test('entryOwner tells composed rows, ours, and another plugin\'s apart', () => 
   assert.deepEqual(mcpManager.entryOwner(undefined), { owner: undefined })
   // ours
   assert.equal(mcpManager.entryOwner('sm-mcp-local').owner, 'self')
-  // another MCP plugin's runtime mount â€” the case that regressed in the first
+  // another MCP plugin's runtime mount â€?the case that regressed in the first
   // version, where it was mislabelled "configured" (and so shown as non-removable)
   const foreign = mcpManager.entryOwner('msm-mcp-ida-pro-mcp')
   assert.equal(foreign.owner, 'other')
@@ -453,7 +453,7 @@ test('denyNamesForDisabled only names tools that are actually live', () => {
   ]
   assert.deepEqual(mcpManager.denyNamesForDisabled(['github'], schemas),
     ['mcp__github__create', 'mcp__github__list'])
-  // an empty/absent tool surface yields nothing â€” tools.restrict would throw on unknown names
+  // an empty/absent tool surface yields nothing â€?tools.restrict would throw on unknown names
   assert.deepEqual(mcpManager.denyNamesForDisabled(['offline'], schemas), [])
   assert.deepEqual(mcpManager.denyNamesForDisabled([], schemas), [])
 })
@@ -533,7 +533,7 @@ function fakeCtx({ entries = [], schemas = [] } = {}) {
           layers.push(layer)
           restrictions.push(layer)
           disposers.push(layer)
-          // real restrict() emits tools/change synchronously â€” reproduce that
+          // real restrict() emits tools/change synchronously â€?reproduce that
           const emit = listeners.get('tools/change')
           if (emit) emit()
           return () => { const at = layers.indexOf(layer); if (at >= 0) layers.splice(at, 1) }
@@ -759,7 +759,7 @@ test('import takes ownership: refused while the other plugin holds the names, al
     assert.equal(blocked.status, 201)
     assert.deepEqual(blocked.payload.imported, [], 'nothing imported while names are taken')
 
-    // the other plugin is disabled â†’ its runtime mounts are gone
+    // the other plugin is disabled â†?its runtime mounts are gone
     entries.length = 0
     const ready = await call('GET', '/skills-management/api/mcp/import')
     assert.equal(ready.payload.importableCount, 2)
@@ -814,7 +814,7 @@ test('the hand-written local file is mounted at startup and shown read-only', as
     }, null, 2))
     const localText = [
       '{',
-      '  // hand-written, with a comment â€” the plugin must never rewrite this',
+      '  // hand-written, with a comment â€?the plugin must never rewrite this',
       '  "servers": [',
       '    { "serverName": "jads", "transport": "stdio", "command": "loc", "args": ["--x"] },',
       '    { "serverName": "clash", "transport": "stdio", "command": "from-local" },',
@@ -841,7 +841,7 @@ test('the hand-written local file is mounted at startup and shown read-only', as
     // both local servers were mounted under our own prefix
     assert.deepEqual(created.map((c) => c.id).sort(), ['sm-mcp-clash', 'sm-mcp-jads'])
 
-    // toggling a local row works, and lands in OUR state â€” the local file is
+    // toggling a local row works, and lands in OUR state â€?the local file is
     // never written, so its bytes must be identical afterwards
     const toggled = await call('PUT', '/skills-management/api/mcp', { serverName: 'jads', enabled: false })
     assert.equal(toggled.status, 200)
@@ -864,6 +864,62 @@ test('the hand-written local file is mounted at startup and shown read-only', as
     // the hand-written file is still untouched, and still the live definition
     assert.equal(await readFile(join(dir, 'mcp.local.jsonc'), 'utf8'), localText)
     assert.equal(pruned.payload.servers.find((s) => s.serverName === 'clash').command, 'from-local')
+  })
+})
+
+test('a local entry parked with "enabled": false can still be switched on', async () => {
+  await withHome(async (home) => {
+    const dir = join(home, 'skills-management')
+    await mkdir(dir, { recursive: true })
+    const localText = [
+      '{',
+      '  "servers": [',
+      '    { "serverName": "parked", "transport": "stdio", "command": "loc", "enabled": false },',
+      '    { "serverName": "live", "transport": "stdio", "command": "loc" },',
+      '  ]',
+      '}',
+    ].join('\n')
+    await writeFile(join(dir, 'mcp.local.jsonc'), localText)
+
+    const { call, created, removed } = setupWithRoutes()
+    const got = await call('GET', '/skills-management/api/mcp')
+    const byName = Object.fromEntries(got.payload.servers.map((s) => [s.serverName, s]))
+    // the row is present and off, and the page can say why
+    assert.equal(byName.parked.enabled, false)
+    assert.equal(byName.parked.enabledInFile, false)
+    assert.equal(byName.parked.enabledForced, false)
+    assert.equal(byName.live.enabled, true)
+    assert.equal(byName.live.enabledInFile, true, 'every other row can be toggled')
+    // only the unparked entry was mounted
+    assert.deepEqual(created.map((c) => c.id), ['sm-mcp-live'])
+
+    // switching it on works anyway: `disabled` cannot express "on", so the page
+    // records the override in `forcedOn` and mounts it â€?the file is untouched
+    const on = await call('PUT', '/skills-management/api/mcp', { serverName: 'parked', enabled: true })
+    assert.equal(on.status, 200)
+    const parkedRow = on.payload.servers.find((s) => s.serverName === 'parked')
+    assert.equal(parkedRow.enabled, true)
+    assert.equal(parkedRow.enabledForced, true)
+    assert.equal(parkedRow.enabledInFile, false, 'the file still says what it said')
+    assert.deepEqual(created.map((c) => c.id), ['sm-mcp-live', 'sm-mcp-parked'])
+    assert.equal(await readFile(join(dir, 'mcp.local.jsonc'), 'utf8'), localText)
+    const state = JSON.parse(await readFile(join(dir, 'mcp.json'), 'utf8'))
+    assert.deepEqual(state.forcedOn, ['parked'])
+    assert.deepEqual(state.disabled, [])
+    // and the override survives a restart of the plugin
+    const afterRestart = await setupWithRoutes().call('GET', '/skills-management/api/mcp')
+    assert.equal(afterRestart.payload.servers.find((s) => s.serverName === 'parked').enabled, true)
+
+    // switching it back off drops the override and the mount, and the file's own
+    // `enabled: false` takes over again
+    const off = await call('PUT', '/skills-management/api/mcp', { serverName: 'parked', enabled: false })
+    assert.equal(off.status, 200)
+    const offRow = off.payload.servers.find((s) => s.serverName === 'parked')
+    assert.equal(offRow.enabled, false)
+    assert.equal(offRow.enabledForced, false)
+    assert.deepEqual(JSON.parse(await readFile(join(dir, 'mcp.json'), 'utf8')).forcedOn, [])
+    assert.deepEqual(removed, ['sm-mcp-parked'])
+    assert.equal(await readFile(join(dir, 'mcp.local.jsonc'), 'utf8'), localText)
   })
 })
 
