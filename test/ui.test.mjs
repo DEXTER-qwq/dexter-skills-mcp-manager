@@ -118,6 +118,16 @@ test('mcpRowToForm tolerates a row with missing or foreign fields', () => {
   assert.equal(form.timeout, '')
 })
 
+test('every locale key is actually consumed by the client source', () => {
+  // Two keys are read through a computed name (the skills page tab labels are
+  // `t('tab' + Capitalised(view))`), so they cannot be found by matching t('…').
+  const DYNAMIC = new Set(['tabExecutors', 'tabMcp'])
+  const src = readFileSync(new URL('../client/index.js', import.meta.url), 'utf8')
+  const referenced = new Set([...src.matchAll(/\bt\(\s*'([A-Za-z0-9_]+)'/g)].map((m) => m[1]))
+  const orphans = Object.keys(ZH).filter((key) => !referenced.has(key) && !DYNAMIC.has(key))
+  assert.deepEqual(orphans, [], `unused locale keys: ${orphans.join(', ')}`)
+})
+
 test('the MCP pane ships its own copy in both locales', () => {
   const mcpKeys = Object.keys(ZH).filter((key) => key.startsWith('mcp'))
   assert.ok(mcpKeys.length >= 35, `expected a full MCP copy set, saw ${mcpKeys.length}`)

@@ -18,7 +18,7 @@ window.__ModuleLoader__.load({
      * light/dark follows the shell; all copy comes from the locale registry
      * (`zh`/`en`) so switches render live. No hardcoded colors, no ad-hoc copy.
      */
-    
+
     // React is a loader platform module. Under plain Node (contract tests) a
     // minimal createElement/hook shim keeps the source loadable for assertions.
     let __React = null
@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
       }
     }
     const { createElement: h, useState, useEffect, useMemo, useRef } = __React
-    
+
     // Platform module — always present in the loader's seeded require table.
     // Under plain Node (tests) it is absent; a tagged-element shim keeps the
     // tree structurally testable while every real surface ships primitives.
@@ -41,13 +41,13 @@ window.__ModuleLoader__.load({
     try { P = require('@deepseek-ai/dsh-client-ui-primitives') } catch {}
     let RDP = null
     try { RDP = require('react-dom') } catch {}
-    
+
     // NOTE: no class components in this module. A `class X extends
     // React.Component` error boundary defined here silently killed rendering in
     // the plugin loader (components before it rendered, it never instantiated,
     // zero errors) — render-time crashes are handled by the try/catch inside
     // SkillsPage and recorded into globalThis.__skErrors instead.
-    
+
     /** Idempotent stylesheet injection — the overlay/tab/card classes are
      *  position-critical (.sk-overlay is position:fixed) so mounting without
      *  them renders the panel invisibly at the end of <body>. */
@@ -59,7 +59,7 @@ window.__ModuleLoader__.load({
       holder.innerHTML = STYLE
       document.head.appendChild(holder)
     }
-    
+
     const prim = (name) => P && P[name]
       ? P[name]
       : function Shim(props) {
@@ -68,7 +68,7 @@ window.__ModuleLoader__.load({
           const el = document.createElement(tag === 'function' || typeof props.as === 'string' ? props.as : tag)
           return h(tag, { ...rest, 'data-p-shim': name }, children)
         }
-    
+
     // Composer services (inputTriggers + sessions) for the ＋ 技能 button plus
     // the `connection` service for the picker's skill catalog: the button opens
     // the plugin's own searchable picker popover (the host slash menu filters
@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
     // depends on it.
     let composerScope = null
     let connectionApi = null
-    
+
     /**
      * Open one registered '/' source over a synthetic collapsed span appended at
      * the draft end (host toggleCommandMenu 同款调用形状；标准 kit 不暴露光标，
@@ -108,7 +108,7 @@ window.__ModuleLoader__.load({
       })
       return true
     }
-    
+
     /**
      * Insert `text` at the end of the session draft through the same scoped
      * event the host slash menu executes (`slash/input-insert-text`). The span
@@ -132,7 +132,7 @@ window.__ModuleLoader__.load({
         }) === true
       } catch { return false }
     }
-    
+
     /** Best-effort refocus of the composer textarea after the picker closes. */
     function refocusComposer() {
       try {
@@ -141,14 +141,14 @@ window.__ModuleLoader__.load({
         if (ta && typeof ta.focus === 'function') ta.focus()
       } catch {}
     }
-    
+
     /** Picker popover list cap — beyond this the search input is the filter. */
     const PICKER_ROW_CAP = 200
-    
+
     /** Skill catalog cache for the picker (ui-skill 同源：connection.api.skills). */
     let skillCatalog = { sessionId: null, at: 0, rows: null }
     const SKILL_CATALOG_TTL = 60_000
-    
+
     /**
      * Picker candidates from the host skill registry (the same list the `/`
      * skill source shows). Subagent sessions have no catalog (ui-skill 同款守卫);
@@ -168,7 +168,7 @@ window.__ModuleLoader__.load({
       skillCatalog = { sessionId, at: now, rows }
       return rows
     }
-    
+
     /**
      * ＋ 技能 picker：锚定在按钮上方、自带搜索框的候选浮层（portal 到 body）。
      * 宿主斜杠菜单靠「输入的 query」过滤，按钮打开的菜单没有输入载体——候选
@@ -229,18 +229,17 @@ window.__ModuleLoader__.load({
                     h('span', { className: 'sk-picker-desc' },
                       row.modelInvocable ? row.description : `${t('pickerUserOnly')} · ${row.description}`))))))
     }
-    
+
     // ── Locale ───────────────────────────────────────────────────────────────
-    
+
     const NS = 'skillsManagement'
-    
+
     const ZH = {
       title: '技能管理',
       close: '关闭',
       tabExecutors: '已安装',
       tabMcp: 'MCP 管理',
       mcpTitle: 'MCP 管理',
-      mcpHint: '管理 dsh 的 MCP server：每条记录会被桥接成模型可调用的工具（mcp__服务名__工具名）。stdio 会在本机启动该程序，streamable-http 则连接远端地址。',
       mcpAdd: '新增 MCP server',
       mcpEdit: '编辑',
       mcpEditTitle: '编辑 MCP server',
@@ -251,7 +250,6 @@ window.__ModuleLoader__.load({
       mcpSourceConfigured: '配置来源',
       mcpSourceUser: '本页新增',
       mcpSourceForeign: '其他插件挂载',
-      mcpSourceHint: '「配置来源」来自 dsh 组合（bundle / patch / preset），本页只开关；「本页新增」的归本页管，可改可删；「其他插件挂载」由别的插件在运行期挂上，本页不动它。',
       mcpForeignHint: '这条由其他插件动态挂载，本页不动它。那个插件一旦被停用，它会移除自己的条目、server 也随之消失——想改由本页管理：先停用那个插件，再点「从其他插件导入」。',
       mcpImport: '从其他插件导入',
       mcpImportTitle: '导入 MCP server',
@@ -264,11 +262,9 @@ window.__ModuleLoader__.load({
       mcpImportDo: '导入选中的 {n} 条',
       mcpImportDone: '已导入 {n} 条',
       mcpImportSkipped: '有 {n} 条挂载失败，详见日志',
-      mcpImportSelectAll: '全选可导入的',
       mcpLiveTag: '已连接',
       mcpOfflineTag: '未连接',
       mcpToolsCount: '{n} 个工具',
-      mcpToggleHint: '停用会把该 server 的工具从模型工具表里移除（server 本身仍在运行），配置不写回 dsh 的任何文件。',
       mcpAddHint: '新增的 server 会立即挂载到 dsh（无需重启），状态存在本插件自己的文件里。',
       mcpServerName: '服务名',
       mcpServerNameHint: '成为工具名前缀：mcp__<服务名>__<工具名>；仅字母数字、下划线、连字符，≤32',
@@ -294,7 +290,6 @@ window.__ModuleLoader__.load({
       mcpDisable: '停用',
       mcpEnable: '启用',
       mcpDisabledTag: '已停用',
-      mcpConfiguredTag: '不可删除',
       mcpConfiguredHint: '这条来自 dsh 组合配置，本页不修改它，只能开关。要永久移除请改你自己的 dsh 配置。',
       mcpSaved: '已更新',
       mcpCreated: '已添加并挂载 MCP server',
@@ -313,9 +308,6 @@ window.__ModuleLoader__.load({
       execDisabledTag: '已停用',
       execManagedTag: '由插件配置文件管理',
       execLockedTag: '锁定（本插件安装库）',
-      execKeyLabel: '标识 (key)',
-      execNameLabel: '显示名',
-      execDirLabel: '技能目录',
       execEnabledLabel: '启用',
       execAdd: '新增执行器',
       execRemove: '删除',
@@ -331,7 +323,6 @@ window.__ModuleLoader__.load({
       saved: '设置已保存',
       refresh: '刷新',
       backCards: '← 智能体工具卡片',
-      backExecutors: '← 已安装',
       backAll: '← 全部技能',
       searchAll: '搜索全部技能…',
       filterWithin: '在 {label} 内筛选…',
@@ -340,17 +331,13 @@ window.__ModuleLoader__.load({
       scanning: '正在扫描 {label}…',
       skillsSuffix: '个技能',
       noExecutors: '本机未发现任何智能体工具目录',
-      dirMissingTitle: '{label}：目录不存在',
-      dirMissingHint: '预期位置 {dir}',
       notFoundGroup: '本机不存在的来源（{n}）',
       dirNotPresent: '目录不存在',
       emptySearch: '没有匹配的技能',
       emptySkillsIn: '{label} 中还没有技能',
-      installedTag: '已装',
       readOnlyTag: '只读',
       toDsh: '安装',
       deleteBtn: '删除',
-      detail: '详情',
       filesCount: '{n} 个文件',
       totalSize: '共 {size}',
       copy: '复制内容',
@@ -365,8 +352,6 @@ window.__ModuleLoader__.load({
       deleteConfirm: '即将从「{where}」删除技能「{name}」，删除后不可恢复。',
       whereDsh: 'DSH 技能库',
       operationFailed: '操作失败',
-      preview: '文件预览',
-      content: '内容',
       activeInDsh: '已在 DSH 生效',
       invocationToggle: '模型可调用',
       hiddenTag: '已隐藏',
@@ -374,8 +359,6 @@ window.__ModuleLoader__.load({
       restoreAction: '恢复可见',
       modelVisibleTag: '模型可见',
       detailHideAction: '在模型目录隐藏',
-      invocationOn: '模型可见',
-      invocationOff: '已从模型目录隐藏',
       invocationHint: '关闭后技能保留在库里，但不再注入对话目录（skill 工具也调不到）',
       pathLabel: '路径',
       meTag: '本机',
@@ -394,14 +377,13 @@ window.__ModuleLoader__.load({
       sortTokensAsc: 'token 低→高',
       sortCharsDesc: '字符 多→少',
     }
-    
+
     const EN = {
       title: 'Skills',
       close: 'Close',
       tabExecutors: 'Installed',
       tabMcp: 'MCP',
       mcpTitle: 'MCP management',
-      mcpHint: 'Manage dsh MCP servers. Each record is bridged into model-callable tools (mcp__<server>__<tool>). stdio launches a local program; streamable-http connects to a URL.',
       mcpAdd: 'Add MCP server',
       mcpEdit: 'Edit',
       mcpEditTitle: 'Edit MCP server',
@@ -412,7 +394,6 @@ window.__ModuleLoader__.load({
       mcpSourceConfigured: 'configured',
       mcpSourceUser: 'added here',
       mcpSourceForeign: 'mounted by another plugin',
-      mcpSourceHint: '“configured” rows come from the dsh composition (bundle / patch / preset) and are toggle-only; “added here” rows are this plugin’s to edit and remove; “mounted by another plugin” rows are left alone here.',
       mcpForeignHint: 'Another plugin mounted this row at runtime, so this page leaves it alone. When that plugin is disabled it removes its own entry and the server disappears with it — to take ownership here: disable that plugin first, then use “Import from another plugin”.',
       mcpImport: 'Import from another plugin',
       mcpImportTitle: 'Import MCP servers',
@@ -425,11 +406,9 @@ window.__ModuleLoader__.load({
       mcpImportDo: 'Import {n} selected',
       mcpImportDone: 'Imported {n}',
       mcpImportSkipped: '{n} failed to mount — see the log',
-      mcpImportSelectAll: 'Select all importable',
       mcpLiveTag: 'connected',
       mcpOfflineTag: 'not connected',
       mcpToolsCount: '{n} tools',
-      mcpToggleHint: 'Disabling removes that server’s tools from the model tool catalog (the server keeps running). No dsh config file is written.',
       mcpAddHint: 'A server added here is mounted into dsh immediately (no restart); its state lives in this plugin’s own file.',
       mcpServerName: 'Server name',
       mcpServerNameHint: 'Becomes the tool-name prefix: mcp__<server>__<tool>; letters, digits, underscore and hyphen only, ≤32',
@@ -455,7 +434,6 @@ window.__ModuleLoader__.load({
       mcpDisable: 'Disable',
       mcpEnable: 'Enable',
       mcpDisabledTag: 'disabled',
-      mcpConfiguredTag: 'cannot remove',
       mcpConfiguredHint: 'This row comes from the dsh composition, so this page does not modify it — only toggles it. Remove it in your own dsh config.',
       mcpSaved: 'Updated',
       mcpCreated: 'MCP server added and mounted',
@@ -474,9 +452,6 @@ window.__ModuleLoader__.load({
       execDisabledTag: 'disabled',
       execManagedTag: 'managed by plugin config',
       execLockedTag: 'locked (this plugin\'s library)',
-      execKeyLabel: 'Key',
-      execNameLabel: 'Display name',
-      execDirLabel: 'Skills dir',
       execEnabledLabel: 'Enabled',
       execAdd: 'Add executor',
       execRemove: 'Remove',
@@ -492,7 +467,6 @@ window.__ModuleLoader__.load({
       saved: 'Settings saved',
       refresh: 'Refresh',
       backCards: '← Agent tool cards',
-      backExecutors: '← Installed',
       backAll: '← All skills',
       searchAll: 'Search all skills…',
       filterWithin: 'Filter within {label}…',
@@ -501,17 +475,13 @@ window.__ModuleLoader__.load({
       scanning: 'Scanning {label}…',
       skillsSuffix: 'skills',
       noExecutors: 'No agent tool directories found on this machine',
-      dirMissingTitle: '{label}: directory not found',
-      dirMissingHint: 'Expected skills at {dir}',
       notFoundGroup: 'Not found on this machine ({n})',
       dirNotPresent: 'directory not present',
       emptySearch: 'No matching skills',
       emptySkillsIn: 'No skills in {label}',
-      installedTag: 'Installed',
       readOnlyTag: 'read-only',
       toDsh: 'Install',
       deleteBtn: 'Delete',
-      detail: 'Detail',
       filesCount: '{n} files',
       totalSize: '{size}',
       copy: 'Copy content',
@@ -526,8 +496,6 @@ window.__ModuleLoader__.load({
       deleteConfirm: 'You are about to delete "{name}" from {where}. This cannot be undone.',
       whereDsh: 'the DSH library',
       operationFailed: 'Operation failed',
-      preview: 'File preview',
-      content: 'Content',
       activeInDsh: 'active in DSH',
       invocationToggle: 'Model-invocable',
       hiddenTag: 'hidden',
@@ -535,8 +503,6 @@ window.__ModuleLoader__.load({
       restoreAction: 'Restore',
       modelVisibleTag: 'model-visible',
       detailHideAction: 'Hide from model catalog',
-      invocationOn: 'model-visible',
-      invocationOff: 'hidden from model catalog',
       invocationHint: 'When off, the skill stays in the library but is not injected into conversation catalogs',
       pathLabel: 'Path',
       meTag: 'me',
@@ -555,18 +521,18 @@ window.__ModuleLoader__.load({
       sortTokensAsc: 'tokens low→high',
       sortCharsDesc: 'chars high→low',
     }
-    
+
     // ── Pure helpers ────────────────────────────────────────────────────────
-    
+
     const API = '/skills-management/api'
-    
+
     function formatSize(bytes) {
       if (!Number.isFinite(bytes) || bytes < 0) return '-'
       if (bytes < 1024) return bytes + ' B'
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
     }
-    
+
     function formatTime(iso) {
       if (!iso) return '-'
       try {
@@ -580,23 +546,23 @@ window.__ModuleLoader__.load({
         return 'now'
       } catch { return '-' }
     }
-    
+
     function gradient(name) {
       let hash = 0
       for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0
       const h1 = Math.abs(hash) % 360
       return `linear-gradient(135deg, hsl(${h1},55%,55%), hsl(${(h1 + 40) % 360},45%,45%))`
     }
-    
+
     const shortName = (name) => name.includes('/') ? name.split('/').slice(1).join('/') : name
-    
+
     /** Shared predicate for skill filtering (name / description / keywords). */
     function matchSkill(s, lower) {
       return (s.name || '').toLowerCase().includes(lower) ||
         (s.description || '').toLowerCase().includes(lower) ||
         (s.keywords || []).some(k => String(k).toLowerCase().includes(lower))
     }
-    
+
     /** 注入开销一行文案：token 在（宿主装了词表）→「≈N token · M 字符」，
      *  降级时只剩字符数；两者都缺（旧响应）→ null 不渲染。 */
     function usageText(s, t) {
@@ -604,7 +570,7 @@ window.__ModuleLoader__.load({
       if (typeof s.chars === 'number') return t('usageCharsOnly', { chars: s.chars })
       return null
     }
-    
+
     /** 卡片排序：缺 token/chars 的行（预热未完成或降级模式）永远沉底，
      *  其余按所选指标升/降序。keyFn 供 {row, s} 包装数组取卡片行。 */
     function sortSkills(rows, sortBy, keyFn = (s) => s) {
@@ -619,7 +585,7 @@ window.__ModuleLoader__.load({
         return asc ? va - vb : vb - va
       })
     }
-    
+
     /** 排序下拉（原生 select：排序是低频操作，不值得自绘 popover）。 */
     function SortSelect({ value, onChange, t }) {
       return h('select', { value, onChange: e => onChange(e.target.value), style: selectStyle(), title: t('sortLabel'), 'aria-label': t('sortLabel') },
@@ -628,9 +594,9 @@ window.__ModuleLoader__.load({
         h('option', { value: 'tokensAsc' }, t('sortTokensAsc')),
         h('option', { value: 'chars' }, t('sortCharsDesc')))
     }
-    
+
     // ── Token-based stylesheet (light/dark adaptive by construction) ────────
-    
+
     const STYLE = `<style>
     .sk-page{position:relative;display:flex;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:var(--dsw-font-sm-14,14px)}
     .sk-overlay{position:fixed;inset:0;z-index:2147483000;background:var(--dsw-alias-bg-base);overflow:auto;padding:20px 26px}
@@ -705,34 +671,34 @@ window.__ModuleLoader__.load({
     .sk-picker-desc{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px}
     .sk-picker-empty{padding:12px 10px;text-align:center;color:var(--dsw-alias-label-dimmed);font-size:13px}
     </style>`
-    
+
     // ── Fetch layer ─────────────────────────────────────────────────────────
-    
+
     async function getJson(url) {
       const r = await fetch(url)
       if (!r.ok) throw new Error('HTTP ' + r.status)
       return r.json()
     }
-    
+
     // ── Small building blocks ────────────────────────────────────────────────
-    
+
     const Tag = ({ tone, children }) =>
       h('span', { className: 'sk-tag' + (tone ? ' ' + tone : '') }, children)
-    
+
     const Spinner = ({ label }) =>
       h('div', { className: 'sk-loading' },
         h('div', { className: 'sk-spin' }),
         h('div', null, label))
-    
+
     const Empty = ({ children }) => h('div', { className: 'sk-empty' }, children)
-    
+
     function Avatar({ name, square, size }) {
       const sizing = size ? { width: size, height: size, fontSize: Math.round(size * 0.42) } : {}
       return h('div', { className: 'sk-avatar' + (square ? ' sq' : ''),
           style: { background: gradient(name), ...sizing } },
         (name[0] || '?').toUpperCase())
     }
-    
+
     /** Executor dropdown: self-contained popover (host primitives expose no Menu). */
     function SourceFilter({ rows, value, onChange, t }) {
       const [open, setOpen] = useState(false)
@@ -758,9 +724,9 @@ window.__ModuleLoader__.load({
             onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { onChange(item.id); setOpen(false) } },
           }, item.label))))
     }
-    
+
     // ── Skill / executor cards ───────────────────────────────────────────────
-    
+
     function SkillCard({ row, s, t, onOpen, onInstall, onDelete, onToggleVisible }) {
       const name = shortName(s.name)
       const usage = usageText(s, t)
@@ -790,7 +756,7 @@ window.__ModuleLoader__.load({
             (row.deletable !== false && !row.readOnly) && h(ButtonLite, { danger: true, small: true,
               onClick: e => { e.stopPropagation(); onDelete(row, s.name) } }, t('deleteBtn')))))
     }
-    
+
     /** Tiny variant buttons before P.Button availability resolution settles —
      *  unified through primitives in the browser via data-p-* swap below. */
     function ButtonLite({ primary, danger, small, children, ...rest }) {
@@ -808,7 +774,7 @@ window.__ModuleLoader__.load({
         ...rest,
       }, children)
     }
-    
+
     function ExecutorCard({ row, t, onEnter }) {
       const count = Array.isArray(row.skills) ? row.skills.length : (row.skillCount || 0)
       const sizeTotal = Array.isArray(row.skills) ? row.skills.reduce((a, s) => a + (s.totalSize || 0), 0) : null
@@ -827,9 +793,9 @@ window.__ModuleLoader__.load({
             : t('dirNotPresent')),
         h('div', { className: 'sk-dir' }, row.dir))
     }
-    
+
     // ── Detail modal ─────────────────────────────────────────────────────────
-    
+
     function DetailModal({ sel, executors, t, onClose, onInstalled, onDeleted }) {
       const [data, setData] = useState(null)
       const [file, setFile] = useState(null)
@@ -838,7 +804,7 @@ window.__ModuleLoader__.load({
       const [toast, setToast] = useState(false)
       const meta = data?.meta || {}
       const row = sel.executorKey ? executors.find(x => x.key === sel.executorKey) : null
-    
+
       useEffect(() => {
         let alive = true
         setData(null)
@@ -846,13 +812,13 @@ window.__ModuleLoader__.load({
         getJson(API + '/detail' + q).then(d => { if (alive) setData(d) }).catch(() => {})
         return () => { alive = false }
       }, [sel])
-    
+
       const openFile = (f) => {
         setFile(f)
         const q = `?name=${encodeURIComponent(sel.name)}&path=${encodeURIComponent(f.path)}${sel.executorKey ? '&executor=' + encodeURIComponent(sel.executorKey) : ''}`
         fetch(API + '/file' + q).then(r => { if (!r.ok) throw 0; return r.text() }).then(setFileText).catch(() => setFileText(''))
       }
-    
+
       const doDelete = async () => {
         try {
           const body = { name: sel.name }
@@ -863,7 +829,7 @@ window.__ModuleLoader__.load({
           onDeleted()
         } catch (e) { setConfirming(false); alert(t('operationFailed') + ': ' + e.message) }
       }
-    
+
       const doInstall = async () => {
         try {
           const body = { name: sel.name }
@@ -873,14 +839,14 @@ window.__ModuleLoader__.load({
           onInstalled()
         } catch (e) { alert(t('operationFailed') + ': ' + e.message) }
       }
-    
+
       const copyContent = () => {
         navigator.clipboard.writeText(data?.content || '').then(() => {
           setToast(true)
           setTimeout(() => setToast(false), 2200)
         }).catch(() => {})
       }
-    
+
       // 治理键开关（dsh 原生 disable-model-invocation）：对用户库（dsh 行）和
       // user-agents 根（agents 行——dsh 内置扫描 ~/.agents/skills）的技能开放
       const [invBusy, setInvBusy] = useState(false)
@@ -894,10 +860,10 @@ window.__ModuleLoader__.load({
           getJson(API + '/detail' + q).then(d => { setData(d) }).catch(() => {})
         } catch (e) { alert(t('operationFailed') + ': ' + e.message) } finally { setInvBusy(false) }
       }
-    
+
       const files = data?.files || []
       const isMd = file ? file.path.endsWith('.md') : true
-    
+
       return h('div', null,
         h(SkDialog, { title: shortName(sel.name), onClose, wide: true },
               h('div', { className: 'sk-page' },
@@ -944,7 +910,7 @@ window.__ModuleLoader__.load({
         }, h('div', { className: 'sk-hint' }, t('deleteConfirm', { name: sel.name, where: row ? row.label : t('whereDsh') }))),
         toast && h(InToast, { text: t('copied') }))
     }
-    
+
     /** In-page dialog: rendered INSIDE the fullscreen overlay's stacking context
      *  so it can never fall behind it (host Modal portals to <body> with a lower
      *  z-index than the fullscreen page and would be invisible). */
@@ -956,11 +922,11 @@ window.__ModuleLoader__.load({
           children,
           footer && h('div', { className: 'sk-dlg-foot' }, footer)))
     }
-    
+
     function InToast({ text }) {
       return h('div', { className: 'sk-toast' }, text)
     }
-    
+
     /** 执行器目录管理：内置行可改目录/停用（dsh 锁定；cordis 配置管理的行只展示），
      *  自定义行可增删改。保存 = 整表 PUT executor-settings（replace 语义），服务端
      *  逐行校验（key kebab、重复、dsh 锁定），改完即时生效无需重启。 */
@@ -972,18 +938,18 @@ window.__ModuleLoader__.load({
       // 重挂载、输入框丢焦点（每个字符后）。__id 在行创建/载入时分配。
       const rowSeq = useRef(0)
       const withIds = (list) => (Array.isArray(list) ? list : []).map((r) => ({ ...r, __id: 'r' + (++rowSeq.current) }))
-    
+
       const applySheet = (d) => setRows(withIds(d && d.executors))
       const refresh = () => getJson(API + '/executor-settings')
         .then(applySheet)
         .catch(e => onToast(t('operationFailed') + ': ' + e.message))
       useEffect(() => { refresh() }, [])
-    
+
       const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
       const patchRow = (index, patch) => setRows(rs => rs.map((r, i) => i === index ? { ...r, ...patch } : r))
       const removeRow = (index) => setRows(rs => rs.filter((_, i) => i !== index))
       const addRow = () => setRows(rs => [...rs, { __id: 'r' + (++rowSeq.current), key: '', label: '', dir: '', source: 'custom', locked: false, managedByConfig: false, disabled: false, overridden: false, defaultDir: '' }])
-    
+
       const validate = () => {
         const customs = rows.filter(r => r.source === 'custom' && !r.managedByConfig)
         for (const r of customs) {
@@ -994,7 +960,7 @@ window.__ModuleLoader__.load({
         if (keys.some((k, i) => keys.indexOf(k) !== i)) return t('execKeyDup')
         return undefined
       }
-    
+
       const saveSheet = async (sheet) => {
         const r = await fetch(API + '/executor-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sheet) })
         const d = await r.json().catch(() => ({}))
@@ -1031,7 +997,7 @@ window.__ModuleLoader__.load({
         try { await saveSheet({ dirs: {}, disabled: [], extra: [] }) }
         catch (e) { onToast(t('operationFailed') + ': ' + e.message) } finally { setBusy(false) }
       }
-    
+
       const tag = (text, tone) => h('span', { className: 'sk-tag' + (tone ? ' ' + tone : '') }, text)
       const rowEl = (r, i) => {
         const editable = !r.locked && !r.managedByConfig
@@ -1060,7 +1026,7 @@ window.__ModuleLoader__.load({
             ? h('input', { className: 'sk-input', value: r.dir, placeholder: t('execDirPlaceholder'), style: { width: '100%' }, onChange: e => patchRow(i, { dir: e.target.value }) })
             : h('div', { className: 'sk-dir' }, r.dir))
       }
-    
+
       return h(SkDialog, { title: t('executorSettings'), onClose, wide: true },
         rows === null
           ? h(Spinner, { label: '…' })
@@ -1076,7 +1042,7 @@ window.__ModuleLoader__.load({
                 h(ButtonLite, { primary: true, disabled: busy, onClick: doSave }, t('save'))),
             ]))
     }
-    
+
     /** Incremental grid: renders the first pageSize cards and grows on demand —
      *  a source with hundreds of skills must not mount at once.
      *  Key the element by the active filter so filtering resets the window. */
@@ -1088,9 +1054,9 @@ window.__ModuleLoader__.load({
           h(ButtonLite, { onClick: () => setShown(n => n + grow) }, t('showMore', { n: items.length - shown }))),
       ]
     }
-    
+
     // ── Views ────────────────────────────────────────────────────────────────
-    
+
     function CardsView({ executors, t, onEnter, onBrowseAll, onOpenSettings }) {
       if (!executors.length) return [
         // 空列表也要留设置入口：全部执行器被停用/目录为空时仍能进管理弹窗
@@ -1120,7 +1086,7 @@ window.__ModuleLoader__.load({
         ],
       ]
     }
-    
+
     function AllSkillsView({ executors, searchText, sourceFilter, sortBy, t, onSearch, onFilter, onSort, onBack, onOpen, onInstall, onDelete, onToggleVisible }) {
       const pending = executors.some(x => x.dirExists && !Array.isArray(x.skills))
       if (pending) return h(Spinner, { label: t('loadingCatalogs') })
@@ -1146,7 +1112,7 @@ window.__ModuleLoader__.load({
           : h('div', { className: 'sk-grid' }, items.map(({ row, s }) =>
               h(SkillCard, { key: row.key + '/' + s.name, row, s, t, onOpen, onInstall, onDelete, onToggleVisible })))]
     }
-    
+
     function DrillInView({ row, searchText, sortBy, t, onSearch, onSort, onBack, onOpen, onInstall, onDelete, onToggleVisible }) {
       if (!row) return null
       if (!row.dirExists) {
@@ -1177,7 +1143,7 @@ window.__ModuleLoader__.load({
               render: s => h(SkillCard, { key: s.name, row, s, t, onOpen, onInstall, onDelete, onToggleVisible }) }),
       ]
     }
-    
+
     function InputBox({ value, placeholder, onSearch }) {
       if (prim('Input')) {
         return h(P.Input, { value, placeholder, className: 'sk-input', onChange: e => onSearch(e.target.value),
@@ -1187,9 +1153,9 @@ window.__ModuleLoader__.load({
         style: { minWidth: 220, minHeight: 32, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', padding: '6px 12px' } })
     }
     function SourceFilterEl(args) { return SourceFilter(args) }
-    
+
     // ── App root ─────────────────────────────────────────────────────────────
-    
+
     function SkillsPage({ t, onClose, embedded }) {
       const [executors, setExecutors] = useState([])
       const [executorView, setExecutorView] = useState('cards')
@@ -1203,12 +1169,12 @@ window.__ModuleLoader__.load({
       const [sortBy, setSortBy] = useState('default')
       const [sel, setSel] = useState(null)
       const rootRef = useRef(null)
-    
+
       const reloadExecutors = () => {
         getJson(API + '/executors?mode=summary').then(d => setExecutors(d.executors || [])).catch(() => {})
       }
       useEffect(reloadExecutors, [])
-    
+
       // Load full lists for one executor on demand
       useEffect(() => {
         if (filterExecutor === 'all') return
@@ -1220,7 +1186,7 @@ window.__ModuleLoader__.load({
           .catch(() => {})
         return () => { alive = false }
       }, [filterExecutor, executors])
-    
+
       // Load all catalogs when entering the flat all-skills view
       useEffect(() => {
         if (executorView !== 'all') return
@@ -1231,9 +1197,9 @@ window.__ModuleLoader__.load({
             .catch(() => {})
         })
       }, [executorView, executors])
-    
+
       const row = filterExecutor !== 'all' ? executors.find(x => x.key === filterExecutor) : null
-    
+
       const openDetail = (s, executorKey) => setSel({ name: s.name, executorKey })
       const [pendingDelete, setPendingDelete] = useState(null)
       const [pendingInstall, setPendingInstall] = useState(null)
@@ -1257,7 +1223,7 @@ window.__ModuleLoader__.load({
         setPendingDelete(null)
         reloadExecutors()
       }
-    
+
       let body = null
       try {
         if (filterExecutor !== 'all') {
@@ -1298,7 +1264,7 @@ window.__ModuleLoader__.load({
         body = h('div', { className: 'sk-empty', style: { color: 'var(--dsw-alias-state-error-primary)' } },
           '\u26A0\uFE0F ' + String((renderErr && renderErr.message) || renderErr))
       }
-    
+
       return h('div', { className: 'sk-page' + (embedded ? '' : ' sk-overlay'), ref: rootRef },
         !embedded && h('div', { className: 'sk-head' },
           h('span', { className: 'sk-title', style: { fontSize: 16 } }, t('title')),
@@ -1338,11 +1304,11 @@ window.__ModuleLoader__.load({
           where: pendingDelete.executor === 'dsh' || !pendingDelete.executor ? t('whereDsh') : ((executors.find(x => x.key === pendingDelete.executor) || {}).label || pendingDelete.executor),
         }))))
       }
-    
+
     function selectStyle() {
       return { minHeight: 30, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-specific-input-major, var(--dsw-alias-bg-layer-1))', color: 'var(--dsw-alias-label-primary)', padding: '4px 10px' }
     }
-    
+
     async function quickDelete(t, executor, name, done) {
       try {
         const body = { name }
@@ -1352,14 +1318,14 @@ window.__ModuleLoader__.load({
         if (typeof done === 'function') done()
       } catch (e) { alert(t('operationFailed') + ': ' + e.message) }
     }
-    
+
     // ── MCP 管理（loader 里的 dsh-mcp-client 条目 + 本插件状态）────────────────
-    
+
     const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
     const SERVER_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/
     /** `KEY=${VAR}` 读宿主环境变量；纯 `KEY=值` 按字面量保存。 */
     const ENV_REF_RE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/
-    
+
     /** 配置对象 → 文本域（`!!js process.env.X` 还原成 `${X}`）。 */
     function mapToText(map) {
       if (map === null || typeof map !== 'object' || Array.isArray(map)) return ''
@@ -1369,7 +1335,7 @@ window.__ModuleLoader__.load({
         return `${key}=${ref ? '${' + ref[1] + '}' : text}`
       }).join('\n')
     }
-    
+
     /** 文本域 → 配置对象 + 第一条错误。值里含 `=` 时按第一个 `=` 切分。 */
     function textToMap(text, t) {
       const out = {}
@@ -1388,11 +1354,11 @@ window.__ModuleLoader__.load({
       }
       return { value: out }
     }
-    
+
     /** 参数文本域 → 数组（一行一个，不解析引号）。 */
     const textToArgs = (text) => String(text === undefined || text === null ? '' : text)
       .split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '')
-    
+
     function mcpRowToForm(row) {
       return {
         serverName: row.serverName || '',
@@ -1406,12 +1372,12 @@ window.__ModuleLoader__.load({
         timeout: typeof row.toolCallTimeoutMs === 'number' ? String(row.toolCallTimeoutMs) : '',
       }
     }
-    
+
     const emptyMcpForm = () => ({
       serverName: '', transport: 'stdio', command: '', argsText: '', envText: '', cwd: '',
       url: '', headersText: '', timeout: '',
     })
-    
+
     const labelStyle = () => ({ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5 })
     const fieldHintStyle = () => ({ color: 'var(--dsw-alias-label-tertiary)', fontSize: 11.5, lineHeight: 1.45 })
     const textareaStyle = () => ({
@@ -1420,7 +1386,7 @@ window.__ModuleLoader__.load({
       border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-2)',
       color: 'var(--dsw-alias-label-primary)', outline: 'none',
     })
-    
+
     /** 新增/编辑弹窗。表单 → API body 的转换与校验都在这里，服务端还会再校验一次。 */
     function McpServerDialog({ t, row, profile, onClose, onSaved }) {
       const editing = row !== undefined && row !== null
@@ -1430,7 +1396,7 @@ window.__ModuleLoader__.load({
       const isStdio = form.transport === 'stdio'
       const patch = (values) => setForm((current) => ({ ...current, ...values }))
       const endpoint = `${API}/mcp?profile=${encodeURIComponent(profile)}`
-    
+
       const submit = async () => {
         setError(null)
         const serverName = form.serverName.trim()
@@ -1458,7 +1424,7 @@ window.__ModuleLoader__.load({
         if (!form.reconnectEnabled) reconnect.enabled = false
         if (form.reconnectAttempts.trim() !== '') reconnect.maxAttempts = Number(form.reconnectAttempts.trim())
         if (Object.keys(reconnect).length > 0) body.reconnect = reconnect
-    
+
         setBusy(true)
         try {
           const response = await fetch(endpoint, {
@@ -1473,17 +1439,17 @@ window.__ModuleLoader__.load({
           setError(t('operationFailed') + ': ' + e.message)
         } finally { setBusy(false) }
       }
-    
+
       const text = (label, value, onChange, hint, placeholder) => h('label', { style: labelStyle() },
         h('span', { className: 'sk-dir' }, label),
         h('input', { className: 'sk-input', value, placeholder, style: { width: '100%' }, onChange: (e) => onChange(e.target.value) }),
         hint !== undefined && h('span', { style: fieldHintStyle() }, hint))
-    
+
       const area = (label, value, onChange, hint) => h('label', { style: labelStyle() },
         h('span', { className: 'sk-dir' }, label),
         h('textarea', { value, spellCheck: false, style: textareaStyle(), onChange: (e) => onChange(e.target.value) }),
         hint !== undefined && h('span', { style: fieldHintStyle() }, hint))
-    
+
       return h(SkDialog, { title: editing ? t('mcpEditTitle') : t('mcpAddTitle'), onClose, wide: true },
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
           h('div', { className: 'sk-hint' }, t('mcpAddHint')),
@@ -1515,7 +1481,7 @@ window.__ModuleLoader__.load({
             h(ButtonLite, { onClick: onClose }, t('mcpCancel')),
             h(ButtonLite, { primary: true, disabled: busy, onClick: submit }, t('mcpSave')))))
     }
-    
+
     /** MCP server 一行：服务名 + 传输摘要 + 开关/编辑/删除。 */
     function McpServerCard({ t, row, onEdit, onToggle, onDelete, busy, canEdit }) {
       const isStdio = row.transport === 'stdio'
@@ -1558,7 +1524,7 @@ window.__ModuleLoader__.load({
             removable && h(ButtonLite, { danger: true, small: true, disabled: busy,
               onClick: () => onDelete(row) }, t('mcpDelete')))))
     }
-    
+
     /**
      * 导入抽屉：列出其他插件状态文件里的 MCP server 候选，勾选后一次性导入。
      * 重复、同名被挂、配置无效的候选会标出原因并禁止勾选。
@@ -1610,7 +1576,7 @@ window.__ModuleLoader__.load({
               onClick: () => onImport([...picked]),
             }, t('mcpImportDo', { n: picked.size })))))
     }
-    
+
     /**
      * MCP 管理面板：一个 profile 的 dsh-mcp-client 条目。
      * 只有用户主动操作才发请求（打开页签 / 切换 profile / 增删改），没有轮询。
@@ -1621,7 +1587,7 @@ window.__ModuleLoader__.load({
       const [dialog, setDialog] = useState(null)      // { row } | { row: null }
       const [pendingDelete, setPendingDelete] = useState(null)
       const [importData, setImportData] = useState(null)   // 非 null = 导入抽屉打开
-    
+
       const load = () => {
         getJson(API + '/mcp')
           .then(setData)
@@ -1631,7 +1597,7 @@ window.__ModuleLoader__.load({
           })
       }
       useEffect(load, [])
-    
+
       const act = async (request) => {
         setBusy(true)
         try {
@@ -1645,9 +1611,9 @@ window.__ModuleLoader__.load({
           return null
         } finally { setBusy(false) }
       }
-    
+
       if (data === null) return h(Spinner, { label: t('mcpLoading') })
-    
+
       // 读取失败：给确定性说明，不留白屏/无限转圈
       if (data.error !== undefined) {
         return [
@@ -1655,7 +1621,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'sk-toolbar' }, h(ButtonLite, { onClick: load }, t('refresh'))),
         ]
       }
-    
+
       const servers = data.servers || []
       const canMount = data.mountAvailable !== false
       const canToggle = data.restrictAvailable !== false
@@ -1705,20 +1671,14 @@ window.__ModuleLoader__.load({
           onToast(t('operationFailed') + ': ' + e.message)
         } finally { setBusy(false) }
       }
-    
-      const foreignCount = servers.filter((row) => row.source === 'foreign').length
-    
+
       return [
         h('div', { className: 'sk-toolbar' },
-          h('span', { className: 'sk-hint' }, t('mcpHint')),
           h('span', { className: 'spacer' }),
           h(ButtonLite, { onClick: load, disabled: busy }, t('refresh')),
           h(ButtonLite, { onClick: openImport, disabled: busy || !canMount }, t('mcpImport')),
           h(ButtonLite, { primary: true, disabled: busy || !canMount, onClick: () => setDialog({ row: null }) }, t('mcpAdd'))),
-        h('div', { className: 'sk-hint' },
-          `${t('mcpStateFile')}: ${data.stateFile || '-'} · ${t('mcpSourceHint')}`),
-        h('div', { className: 'sk-hint' }, t('mcpToggleHint')),
-        foreignCount > 0 && h('div', { className: 'sk-hint' }, t('mcpForeignHint')),
+        h('div', { className: 'sk-hint' }, `${t('mcpStateFile')}: ${data.stateFile || '-'}`),
         (!canMount || !canToggle) && h('div', { className: 'sk-tag danger', style: { alignSelf: 'flex-start' } }, t('mcpUnavailableTag')),
         (!canMount || !canToggle) && h('div', { className: 'sk-hint' }, t('mcpUnavailableHint')),
         servers.length === 0
@@ -1747,15 +1707,15 @@ window.__ModuleLoader__.load({
         }, h('div', { className: 'sk-hint' }, t('mcpDeleteConfirm', { name: pendingDelete.serverName || pendingDelete.entryId }))),
       ]
     }
-    
+
     // ── Slot entries ─────────────────────────────────────────────────────────
-    
+
     /** Settings section slot entry: render the page directly in the host tree. */
     function SettingsSlotComponent(props) {
       useEffect(ensureStyles, [])
       return h(SkillsPage, { t: props.__t, embedded: true })
     }
-    
+
     /** MCP 管理 section：与技能管理同级，自己一个页面。 */
     function McpSectionComponent(props) {
       useEffect(ensureStyles, [])
@@ -1768,11 +1728,11 @@ window.__ModuleLoader__.load({
         })),
         toast && h(InToast, { text: toast }))
     }
-    
+
     // ── Plugin plane contract ────────────────────────────────────────────────
-    
+
     const CLIENT_NAME = '@weibaohui/skills-management'
-    
+
     module.exports = {
       name: CLIENT_NAME,
       inject: ['slots', 'locale'],
@@ -1878,7 +1838,7 @@ window.__ModuleLoader__.load({
         }, 'skills-management: input left button')
       },
     }
-    
+
     /** Composer tool-row button: 加号+文字 chip，点击在按钮上方打开自带搜索的
      *  技能 picker 浮层（候选 = 宿主技能注册表，ui-skill 同源）；pick 经
      *  slash/input-insert-text 写入 `/<name> `。浮层背板盖住按钮以外的区域，
