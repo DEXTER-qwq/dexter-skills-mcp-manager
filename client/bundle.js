@@ -618,9 +618,6 @@ window.__ModuleLoader__.load({
     const STYLE = `<style>
     .sk-page{position:relative;display:flex;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:var(--dsw-font-sm-14,14px)}
     .sk-overlay{position:fixed;inset:0;z-index:2147483000;background:var(--dsw-alias-bg-base);overflow:auto;padding:20px 26px}
-    .sk-tabs{display:flex;gap:6px;border-bottom:1px solid var(--dsw-alias-border-l2);padding-bottom:10px}
-    .sk-tabpill{background:transparent;border:1px solid transparent;border-radius:999px;padding:6px 14px;cursor:pointer;font-family:var(--dsw-font-family);font-size:13.5px;color:var(--dsw-alias-label-secondary)}
-    .sk-tabpill.on{font-weight:600;color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary));background:var(--dsw-alias-bg-layer-2)}
     .sk-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .sk-body{display:flex;flex-direction:column;gap:14px}
     .sk-inv-toggle{display:inline-flex;gap:8px;align-items:center}
@@ -1178,7 +1175,6 @@ window.__ModuleLoader__.load({
     // ── App root ─────────────────────────────────────────────────────────────
     
     function SkillsPage({ t, onClose, embedded }) {
-      const [view, setView] = useState('skills')   // 'skills' | 'mcp'
       const [executors, setExecutors] = useState([])
       const [executorView, setExecutorView] = useState('cards')
       const [filterExecutor, setFilterExecutor] = useState('all')
@@ -1292,19 +1288,12 @@ window.__ModuleLoader__.load({
           h('span', { className: 'sk-title', style: { fontSize: 16 } }, t('title')),
           h('span', { className: 'spacer' }),
           h(ButtonLite, { onClick: () => onClose && onClose() }, t('close'))),
-        h('div', { className: 'sk-tabs' }, [['skills', 'tabExecutors'], ['mcp', 'tabMcp']].map(([key, labelKey]) =>
-          h('button', {
-            key, className: 'sk-tabpill' + (view === key ? ' on' : ''), style: pillStyle(view === key),
-            onClick: () => setView(key),
-          }, t(labelKey)))),
-        view === 'mcp'
-          ? h('div', { className: 'sk-body' }, h(McpPane, { t, onToast: setPageToast }))
-          : h('div', { className: 'sk-body' }, body),
-        view !== 'mcp' && sel && h(DetailModal, { sel, executors, t,
+        h('div', { className: 'sk-body' }, body),
+        sel && h(DetailModal, { sel, executors, t,
           onClose: () => setSel(null),
           onInstalled: () => { setSel(null); reloadExecutors() },
           onDeleted: () => { setSel(null); reloadExecutors() } }),
-        view !== 'mcp' && executorSettingsOpen && h(ExecutorSettingsDialog, {
+        executorSettingsOpen && h(ExecutorSettingsDialog, {
           t,
           onClose: () => setExecutorSettingsOpen(false),
           onToast: (text) => { setPageToast(text); setTimeout(() => setPageToast(null), 3000) },
@@ -1336,14 +1325,6 @@ window.__ModuleLoader__.load({
     
     function selectStyle() {
       return { minHeight: 30, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-specific-input-major, var(--dsw-alias-bg-layer-1))', color: 'var(--dsw-alias-label-primary)', padding: '4px 10px' }
-    }
-    function pillStyle(on) {
-      return {
-        padding: '6px 14px', borderRadius: 999, cursor: 'pointer', fontSize: 13.5, fontWeight: on ? 600 : 400,
-        border: '1px solid ' + (on ? 'var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary))' : 'transparent'),
-        background: on ? 'var(--dsw-alias-bg-layer-2)' : 'transparent',
-        color: on ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
-      }
     }
     
     async function quickDelete(t, executor, name, done) {
@@ -1586,9 +1567,13 @@ window.__ModuleLoader__.load({
     
       const load = (name) => {
         const query = name ? `?profile=${encodeURIComponent(name)}` : ''
+        setData(null)
         getJson(API + '/mcp' + query)
           .then((payload) => { setData(payload); setProfile(payload.profile) })
-          .catch((e) => onToast(t('operationFailed') + ': ' + e.message))
+          .catch((e) => {
+            // 拿不到 profile（或请求失败）时也要把状态收尾，否则页面永远停在 loading
+            setData({ servers: [], profiles: [], canWrite: false, error: String(e && e.message || e) })
+          })
       }
       useEffect(() => { load(null) }, [])
     
@@ -1607,6 +1592,20 @@ window.__ModuleLoader__.load({
       }
     
       if (data === null) return h(Spinner, { label: t('mcpLoading') })
+    
+      // 读取失败（例如无法判定 profile）：给确定性说明，不留白屏/无限转圈
+      if (data.error !== undefined) {
+        return [
+          h(Empty, null, `${t('operationFailed')}: ${data.error}`),
+          h('div', { className: 'sk-hint' }, t('mcpNoProfile')),
+          (data.profiles || []).length > 0 && h('div', { className: 'sk-toolbar' },
+            h('span', { className: 'sk-dir' }, t('mcpProfile')),
+            (data.profiles || []).map((p) => h(ButtonLite, {
+              key: p.name || p, onClick: () => load(p.name || p),
+            }, p.name || p))),
+          h('div', { className: 'sk-toolbar' }, h(ButtonLite, { onClick: () => load(null) }, t('refresh'))),
+        ]
+      }
     
       const servers = data.servers || []
       const writable = data.canWrite !== false
@@ -1687,6 +1686,19 @@ window.__ModuleLoader__.load({
       return h(SkillsPage, { t: props.__t, embedded: true })
     }
     
+    /** MCP 管理 section：与技能管理同级，自己一个页面。 */
+    function McpSectionComponent(props) {
+      useEffect(ensureStyles, [])
+      const t = props.__t
+      const [toast, setToast] = useState(null)
+      return h('div', { className: 'sk-page' },
+        h('div', { className: 'sk-body' }, h(McpPane, {
+          t,
+          onToast: (text) => { setToast(text); setTimeout(() => setToast(null), 3000) },
+        })),
+        toast && h(InToast, { text: toast }))
+    }
+    
     // ── Plugin plane contract ────────────────────────────────────────────────
     
     const CLIENT_NAME = '@weibaohui/skills-management'
@@ -1761,6 +1773,22 @@ window.__ModuleLoader__.load({
           }))
           } catch (e) { (globalThis.__skErrors = globalThis.__skErrors || []).push('settings:' + (e && e.message)); throw e }
         }, 'skills-management: settings section')
+        // 「MCP 管理」是**同级**的 settings section（不是技能页里的页签）：侧栏里与
+        // 「技能管理」并列，各自独立打开。
+        ctx.effect(() => {
+          try {
+          ctx.slots.inject('settings.section', () => ctx.slots.register({
+            name: 'settings.section',
+            id: CLIENT_NAME + ':mcp',
+            order: 91,
+            locale: NS,
+            label: () => t('mcpTitle'),
+            inject: () => ({}),
+          }, function McpSectionSlot() {
+            return h(McpSectionComponent, { __t: t })
+          }))
+          } catch (e) { (globalThis.__skErrors = globalThis.__skErrors || []).push('settings:mcp:' + (e && e.message)); throw e }
+        }, 'skills-management: mcp settings section')
         ctx.effect(() => {
           try {
           ctx.slots.inject('conversation.input.left', () => ctx.slots.register({

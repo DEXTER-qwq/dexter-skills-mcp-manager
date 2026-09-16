@@ -39,6 +39,8 @@ const { homedir } = require('node:os')
 
 /** Loader entry name of the official MCP bridge plugin. */
 const MCP_PLUGIN = '@deepseek-ai/dsh-mcp-client'
+/** This plugin's own package name — the marker for "which profile loaded me". */
+const PLUGIN_PACKAGE = '@weibaohui/skills-management'
 const PROFILE_PATCH_FILENAME = 'cordis.patch.yml'
 const BEGIN_MARKER = '# >>> skills-management: MCP servers (managed block — edit via the MCP 管理 page) >>>'
 const END_MARKER = '# <<< skills-management: MCP servers <<<'
@@ -60,10 +62,16 @@ function dshHome() {
 }
 
 /**
- * Profile to manage, in priority order: an explicit name, the directory when
- * one is pinned explicitly (its basename IS the profile), then the environment
- * — `DSH_DESKTOP_DEFAULT_PROFILE` is what the Desktop shim exports for exactly
- * this purpose.
+ * Profile to manage, in priority order:
+ *  1. an explicit name, then an explicitly pinned directory (whose basename IS
+ *     the profile);
+ *  2. the Profile-switcher env vars;
+ *  3. the Desktop's own active-profile state file.
+ * Those are all "someone told us". Step 4 (`detectProfile`) is the inference
+ * used when nothing did: the Host process does NOT inherit
+ * `DSH_DESKTOP_DEFAULT_PROFILE` (the Desktop only exports that into its
+ * terminal), so relying on the environment alone left the pane with no profile
+ * at all.
  */
 function activeProfileName(config = {}) {
   for (const candidate of [config.profile, process.env.SKILLS_MCP_PROFILE]) {
@@ -77,6 +85,78 @@ function activeProfileName(config = {}) {
     if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim()
   }
   return undefined
+}
+
+/** Where the Desktop records its active profile (it reads it back on boot). */
+async function readDesktopActiveProfile() {
+  const appData = process.env.APPDATA
+  if (typeof appData !== 'string' || appData === '') return undefined
+  const file = join(appData, 'DSH Desktop', 'profile-selection', 'state.json')
+  try {
+    const parsed = JSON.parse(await fsP.readFile(file, 'utf8'))
+    const active = parsed?.active
+    if (typeof active === 'string' && active.trim() !== '') return active.trim()
+  } catch { /* not the Desktop, or not written yet */ }
+  return undefined
+}
+
+/** True when the profile's manifest lists this plugin as a dependency. */
+async function profileHasPlugin(name) {
+  try {
+    const manifest = JSON.parse(await fsP.readFile(join(dshHome(), 'profiles', name, 'package.json'), 'utf8'))
+    return Object.prototype.hasOwnProperty.call(manifest?.dependencies ?? {}, PLUGIN_PACKAGE)
+  } catch { return false }
+}
+
+/**
+ * Infer the profile this running copy belongs to.
+ *
+ * The Host never tells a plugin which profile loaded it, so the honest signal
+ * is "which profile has ME installed" — a plugin can only run inside a profile
+ * that declares it. With exactly one such profile the answer is unambiguous;
+ * with several we ask the Desktop state file; if that does not decide either we
+ * return no name plus the candidates, so the caller can ask the user to pick
+ * instead of guessing which profile to edit.
+ *
+ * @returns `{ name, source, names }` — `name` is undefined when undecided.
+ */
+async function detectProfile() {
+  const profiles = (await listProfiles()).map((entry) => entry.name)
+  const installed = []
+  for (const name of profiles) {
+    if (await profileHasPlugin(name)) installed.push(name)
+  }
+  // `installed` is the strong signal; fall back to every profile only when no
+  // manifest mentions us (a profile that resolves the plugin some other way).
+  const candidates = installed.length > 0 ? installed : profiles
+
+  const desktopActive = await readDesktopActiveProfile()
+  if (desktopActive !== undefined && candidates.includes(desktopActive)) {
+    return { name: desktopActive, source: 'desktop-active', names: candidates }
+  }
+  if (candidates.length === 1) {
+    return { name: candidates[0], source: installed.length > 0 ? 'sole-profile-with-plugin' : 'sole-profile', names: candidates }
+  }
+  return { name: undefined, source: 'ambiguous', names: candidates }
+}
+
+/**
+ * Resolve the profile for one request. An explicit setting wins; otherwise
+ * infer. `unknown: true` marks a configured name that does not exist on disk.
+ */
+async function resolveProfile(config = {}) {
+  const names = (await listProfiles()).map((entry) => entry.name)
+  const explicit = activeProfileName(config)
+  if (explicit !== undefined) {
+    const pinnedDir = typeof config.profileDir === 'string' && config.profileDir.trim() !== ''
+    if (!pinnedDir && names.length > 0 && !names.includes(explicit)) {
+      const detected = await detectProfile()
+      return { name: explicit, source: 'configured', unknown: true, names, detected: detected.name }
+    }
+    return { name: explicit, source: 'configured', names }
+  }
+  const detected = await detectProfile()
+  return { ...detected, names }
 }
 
 function assertProfileName(name) {
@@ -710,6 +790,8 @@ module.exports = {
   isJsExpr,
   dshHome,
   activeProfileName,
+  resolveProfile,
+  detectProfile,
   profileDirFor,
   listProfiles,
   readPatchReload,

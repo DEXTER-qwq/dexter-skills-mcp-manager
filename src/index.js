@@ -665,7 +665,7 @@ function mcpErrorStatus(error) {
 }
 
 /** 读一份 profile 的 MCP 现状，组装成前端需要的响应体。 */
-async function mcpSnapshot(profileName, mcpConfig) {
+async function mcpSnapshot(profileName, mcpConfig, resolution) {
   const read = await mcpProfile.readMcpRows(profileName, mcpConfig)
   const profiles = await mcpProfile.listProfiles()
   let warning
@@ -678,6 +678,7 @@ async function mcpSnapshot(profileName, mcpConfig) {
   }
   return {
     profile: read.profile,
+    profileSource: resolution === undefined ? undefined : resolution.source,
     activeProfile: mcpProfile.activeProfileName(mcpConfig),
     profiles,
     patchFile: displayPath(read.patchFile),
@@ -1102,17 +1103,50 @@ module.exports = {
           }
 
           // ── MCP 管理：/skills-management/api/mcp ──────────────────────
-          // 读：列出目标 profile 里本插件管理的 MCP server（含 Profile 下拉数据）
-          if (req.method === 'GET' && apiPath === '/skills-management/api/mcp') {
-            const profile = query.get('profile') || mcpProfile.activeProfileName(mcpConfig)
-            if (profile === undefined) { sendJson(res, 400, { error: 'no active profile: set config.profile or use ?profile=<name>' }); return }
-            sendJson(res, 200, await mcpSnapshot(profile, mcpConfig))
-            return
-          }
+          // profile 解析：显式配置 → Desktop 活动 profile → 「哪个 profile 装了
+          // 本插件」。三者都得不出结论时不下赌注，把候选交给前端让用户选。
+          if (apiPath === '/skills-management/api/mcp') {
+            const requested = query.get('profile')
+            const known = (await mcpProfile.listProfiles()).map((p) => p.name)
+            const resolution = requested !== null && requested !== ''
+              ? { name: requested, source: 'requested', names: known,
+                  unknown: known.length > 0 && !known.includes(requested) }
+              : await mcpProfile.resolveProfile(mcpConfig)
 
-          if (apiPath === '/skills-management/api/mcp' && (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE')) {
-            const profile = query.get('profile') || mcpProfile.activeProfileName(mcpConfig)
-            if (profile === undefined) { sendJson(res, 400, { error: 'no active profile: set config.profile or use ?profile=<name>' }); return }
+            if (resolution.name === undefined) {
+              sendJson(res, 409, {
+                error: 'cannot determine which profile to manage',
+                reason: resolution.source,
+                profiles: resolution.names,
+                hint: 'pass ?profile=<name>, or set mcpProfile in the plugin config',
+              })
+              return
+            }
+
+            // 读：列出目标 profile 里本插件管理的 MCP server（含 Profile 下拉数据）
+            if (req.method === 'GET') {
+              const payload = await mcpSnapshot(resolution.name, mcpConfig, resolution)
+              if (resolution.unknown === true) {
+                payload.warnings = [...payload.warnings,
+                  `profile '${resolution.name}' does not exist under $DSH_HOME/profiles`
+                  + (resolution.detected === undefined ? '' : `; '${resolution.detected}' looks like the active one`)]
+              }
+              sendJson(res, 200, payload)
+              return
+            }
+            if (req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'DELETE') {
+              sendJson(res, 405, { error: 'method not allowed' })
+              return
+            }
+            if (resolution.unknown === true) {
+              sendJson(res, 409, {
+                error: `profile '${resolution.name}' does not exist under $DSH_HOME/profiles`,
+                profiles: resolution.names,
+              })
+              return
+            }
+
+            const profile = resolution.name
             const state = await mcpProfile.loadState(profile, mcpConfig)
             const taken = new Set(state.entries.map((e) => e.id))
 
@@ -1126,7 +1160,7 @@ module.exports = {
               const id = mcpProfile.managedId(config2.serverName, taken)
               state.entries.push({ id, config: config2 })
               await mcpProfile.writeState(state, state.entries, state.disabledIds)
-              sendJson(res, 201, { id, ...(await mcpSnapshot(profile, mcpConfig)) })
+              sendJson(res, 201, { id, ...(await mcpSnapshot(profile, mcpConfig, resolution)) })
               return
             }
 
@@ -1149,7 +1183,7 @@ module.exports = {
               if (body.enabled === false) disabled.add(id)
               else if (body.enabled === true) disabled.delete(id)
               await mcpProfile.writeState(state, state.entries, [...disabled])
-              sendJson(res, 200, await mcpSnapshot(profile, mcpConfig))
+              sendJson(res, 200, await mcpSnapshot(profile, mcpConfig, resolution))
               return
             }
 
@@ -1166,7 +1200,7 @@ module.exports = {
               state,
               state.entries.filter((e) => !remove.has(e.id)),
               state.disabledIds.filter((id) => !remove.has(id)))
-            sendJson(res, 200, await mcpSnapshot(profile, mcpConfig))
+            sendJson(res, 200, await mcpSnapshot(profile, mcpConfig, resolution))
             return
           }
 

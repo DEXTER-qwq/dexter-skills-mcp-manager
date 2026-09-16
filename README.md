@@ -18,7 +18,7 @@ DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有
 
 ### MCP 管理
 
-设置页里的第二个页签，管理**当前 profile** 的 MCP server 条目。
+设置页里**与「技能管理」同级**的区块（侧栏独立入口，不是技能页里的页签），管理**当前 profile** 的 MCP server 条目。
 
 背景：dsh 里一条 MCP server 就是 profile 组合里的一条 `@deepseek-ai/dsh-mcp-client` 记录，它的工具会以 `mcp__<服务名>__<工具名>` 出现在模型工具表里；用户自己的落点就是该 profile 的 `~/.dsh/profiles/<profile>/cordis.patch.yml`。
 
@@ -27,6 +27,17 @@ DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有
 - **停用 / 启用**：写入一条 `{ id, disable: true }` patch，不删除记录
 - **删除**：连同它的停用行一起移除
 - **环境变量与请求头**：一行一个 `KEY=值`；写 `KEY=${VAR}` 会落成 `!!js process.env.VAR`（读宿主环境变量，不落盘明文）
+
+#### profile 是怎么确定的
+
+dsh **不会**告诉插件「哪个 profile 加载了你」——Desktop 的 `DSH_DESKTOP_DEFAULT_PROFILE` 只导出给它的终端，宿主进程里没有。所以按以下顺序解析：
+
+1. `config.mcpProfile`（cordis 配置）或 `config.mcpProfileDir`（直接钉住目录，profile 名取目录名）
+2. `$SKILLS_MCP_PROFILE`
+3. Desktop 自己的活动 profile 状态：`%APPDATA%\DSH Desktop\profile-selection\state.json` 的 `active`
+4. **推断**：哪个 profile 的 `package.json` 里把本插件列为依赖（插件只会在装了它的 profile 里运行）。只有一个 → 用它；有多个 → 用第 3 步挑；仍不能确定 → 返回 409 并列出候选，让 UI 提示你选，**不猜**
+
+UI 上仍可用 Profile 下拉切换（等价于 `?profile=<name>`）。
 
 ## 改造说明（相对上游 0.6.1 删掉了什么）
 
@@ -144,9 +155,9 @@ dsh plugin why @weibaohui/skills-management      # 应显示 link:D:\11dsh\skill
 
 然后打开 Web UI → **设置** → 左侧「技能管理」。卸载：`dsh plugin remove @weibaohui/skills-management`。
 
-页面顶部两个页签：
+设置页侧栏里会出现**两个**条目：
 
-- **已安装**：执行器卡片 → 钻入看该来源技能 → 安装 / 删除 / 隐藏；⚙ 执行器目录：改目录、停用、新增自定义来源、恢复默认；详情页可预览 SKILL.md 全文与附属文件、切换模型可调用
+- **技能管理**：执行器卡片 → 钻入看该来源技能 → 安装 / 删除 / 隐藏；⚙ 执行器目录：改目录、停用、新增自定义来源、恢复默认；详情页可预览 SKILL.md 全文与附属文件、切换模型可调用
 - **MCP 管理**：列出/新增/编辑/停用/删除当前 profile 的 MCP server（见上文「MCP 管理」）
 
 ## 开发

@@ -158,16 +158,25 @@ test('apply registers dictionaries and both slot entries', async () => {
   }
   plugin.apply(ctx)
   assert.deepEqual(calls.map(c => [c[0], c[1]]).sort(), [[NS, 'en'], [NS, 'zh']])
-  assert.equal(registered.length, 2)
+  // three entries: two settings sections (skills + MCP, siblings) + the composer button
+  assert.equal(registered.length, 3)
   const names = registered.map(r => r.name).sort()
-  assert.deepEqual(names, ['conversation.input.left', 'settings.section'])
+  assert.deepEqual(names, ['conversation.input.left', 'settings.section', 'settings.section'])
   for (const spec of registered) {
-    assert.equal(spec.id, plugin.name)
     assert.equal(typeof spec.inject, 'function')
+    if (spec.name === 'settings.section') assert.equal(typeof spec.label, 'function')
+    else assert.equal(spec.id, plugin.name)
   }
+  // the two settings sections are distinct entries with distinct ids
+  const sections = registered.filter(r => r.name === 'settings.section')
+  assert.deepEqual(sections.map(s => s.id), [plugin.name, plugin.name + ':mcp'])
+  assert.deepEqual(sections.map(s => typeof s.label()), ['string', 'string'])
+  assert.notEqual(sections[0].label(), sections[1].label(), 'the two sidebar entries must not share a label')
+  assert.ok(sections[1].order > sections[0].order, 'MCP sits right after skills')
   // ＋技能按钮槽位：打开自带搜索的 picker 浮层
   const composer = registered.find(r => r.name === 'conversation.input.left')
   assert.equal(typeof composer, 'object')
+  assert.equal(composer.id, plugin.name)
 })
 
 test('insertComposerText bails slash/input-insert-text with an end-of-draft span', () => {
