@@ -828,9 +828,14 @@ module.exports = {
       const schemas = toolsService !== undefined && typeof toolsService.schemas === 'function' ? toolsService.schemas() : []
       const loader = serviceOf('loader')
       const state = mcpStore.get()
+      const stateStatus = typeof mcpStore.status === 'function' ? mcpStore.status() : { status: 'ok' }
       return {
         servers: mcpManager.listServers(loader, state, schemas),
         stateFile: displayPath(mcpManager.stateFile()),
+        // 'corrupt' means the list below is NOT the whole truth — the page must say so
+        stateStatus: stateStatus.status,
+        stateError: stateStatus.error,
+        stateBackup: stateStatus.backup === undefined ? undefined : displayPath(stateStatus.backup),
         loaderAvailable: loader !== undefined && typeof loader.entries === 'function',
         mountAvailable: loader !== undefined && typeof loader.create === 'function',
         restrictAvailable: toolsService !== undefined && typeof toolsService.schemas === 'function',

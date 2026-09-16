@@ -107,6 +107,93 @@ test('writes are atomic: no temp file is left behind', async () => {
   })
 })
 
+// ── corruption: report it, repair the one fixable shape, never hide it ──
+
+test('two writes in the same millisecond must not share a temp path', async () => {
+  await withHome(async (home) => {
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    store.loadSync()
+    // no await between them: both land in the same tick, where Date.now() alone
+    // would hand them the same temp filename
+    const first = store.replace({ version: 1, disabled: [], servers: [{ serverName: 'one', transport: 'stdio', command: 'c' }] })
+    const second = store.replace({ version: 1, disabled: [], servers: [{ serverName: 'two', transport: 'stdio', command: 'c' }] })
+    await Promise.all([first, second])
+    const state = JSON.parse(await readFile(join(home, 'skills-management', 'mcp.json'), 'utf8'))
+    assert.deepEqual(state.servers.map((s) => s.serverName), ['two'], 'the last write wins, and it is valid JSON')
+    const entries = await (await import('node:fs/promises')).readdir(join(home, 'skills-management'))
+    assert.deepEqual(entries, ['mcp.json'])
+  })
+})
+
+test('repairMissingCommas fixes the one shape it claims to, and nothing else', () => {
+  const broken = '{\n  "servers": [\n    {\n      "a": 1\n    }\n    {\n      "a": 2\n    }\n  ]\n}'
+  const fixed = mcpManager.repairMissingCommas(broken)
+  assert.notEqual(fixed, undefined)
+  assert.deepEqual(JSON.parse(fixed).servers, [{ a: 1 }, { a: 2 }])
+  // already valid → untouched
+  assert.equal(mcpManager.repairMissingCommas('{"a":1}'), undefined)
+  // braces and escaped quotes inside strings must not confuse the scanner
+  const withBraces = '{\n  "servers": [\n    {\n      "c": "a } b { c \\" x"\n    }\n    {\n      "c": "d"\n    }\n  ]\n}'
+  const fixed2 = mcpManager.repairMissingCommas(withBraces)
+  assert.deepEqual(JSON.parse(fixed2).servers.map((s) => s.c), ['a } b { c " x', 'd'])
+  // genuinely broken in another way → refused, not guessed at
+  assert.equal(mcpManager.repairMissingCommas('{ "a": '), undefined)
+  assert.equal(mcpManager.repairMissingCommas('not json at all'), undefined)
+})
+
+test('a corrupt state file is repaired, backed up, and reported', async () => {
+  await withHome(async (home) => {
+    const dir = join(home, 'skills-management')
+    await mkdir(dir, { recursive: true })
+    const good = '{\n  "version": 1,\n  "disabled": [],\n  "servers": [\n    {\n      "serverName": "one",\n      "transport": "stdio",\n      "command": "c"\n    }\n  ]\n}'
+    // the exact damage seen in the wild: a missing comma between two objects
+    const damaged = good.replace('\n  ]\n}', ',\n    {\n      "serverName": "two",\n      "transport": "stdio",\n      "command": "c"\n    }\n  ]\n}')
+      .replace('    },\n', '    }\n')
+    await writeFile(join(dir, 'mcp.json'), damaged)
+
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    const state = store.loadSync()
+    assert.deepEqual(state.servers.map((s) => s.serverName), ['one', 'two'], 'both servers survive the repair')
+    const status = store.status()
+    assert.equal(status.status, 'repaired')
+    assert.ok(status.backup.endsWith('.bak'), 'the original bytes are kept aside')
+    assert.equal(await readFile(status.backup, 'utf8'), damaged, 'the backup is the original text')
+
+    const onDisk = JSON.parse(await readFile(join(dir, 'mcp.json'), 'utf8'))
+    assert.deepEqual(onDisk.servers.map((s) => s.serverName), ['one', 'two'])
+  })
+})
+
+test('an unrepairable state file is reported instead of silently emptying the list', async () => {
+  await withHome(async (home) => {
+    const dir = join(home, 'skills-management')
+    await mkdir(dir, { recursive: true })
+    const junk = '{"servers": [ this is not json'
+    await writeFile(join(dir, 'mcp.json'), junk)
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    assert.deepEqual(store.loadSync().servers, [])
+    const status = store.status()
+    assert.equal(status.status, 'corrupt')
+    assert.ok(status.error.length > 0, 'the parse error is carried for the UI')
+    assert.equal(await readFile(join(dir, 'mcp.json'), 'utf8'), junk, 'the damaged file is left as found')
+  })
+})
+
+test('missing and empty are distinct statuses', async () => {
+  await withHome(async (home) => {
+    const missing = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    missing.loadSync()
+    assert.equal(missing.status().status, 'missing')
+
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    store.loadSync()
+    await store.replace({ version: 1, disabled: [], servers: [] })
+    const reopened = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    reopened.loadSync()
+    assert.equal(reopened.status().status, 'empty')
+  })
+})
+
 // ── validation ──────────────────────────────────────────────────────────
 
 test('validateServerInput produces the exact dsh-mcp-client config shape', () => {

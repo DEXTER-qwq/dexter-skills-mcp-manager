@@ -31,7 +31,7 @@
  */
 
 const fsP = require('node:fs/promises')
-const { readFileSync } = require('node:fs')
+const { readFileSync, writeFileSync } = require('node:fs')
 const { join, resolve } = require('node:path')
 const { homedir } = require('node:os')
 
@@ -74,6 +74,65 @@ const emptyState = () => ({ version: STATE_VERSION, disabled: [], servers: [] })
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 /**
+ * Repair the one corruption we know how to fix: two objects where a comma was
+ * lost between them (`} {`), which makes the whole file unparseable and — with
+ * a plain fallback — silently empties the user's server list.
+ *
+ * Only applied when the text is otherwise balanced, and the result is only
+ * accepted if it parses. The original bytes are always copied aside first.
+ *
+ * @returns the repaired text, or undefined when this is not that corruption.
+ */
+function repairMissingCommas(text) {
+  let depth = 0
+  let quote = null
+  let escape = false
+  let out = ''
+  let emitted = 0 // how much of `text` has been copied into `out`
+
+  /** Copy `text` up to and including index `end`, then maybe insert a comma. */
+  const flushTo = (end, insertComma) => {
+    out += text.slice(emitted, end + 1)
+    emitted = end + 1
+    if (!insertComma) return
+    // insert before any whitespace we already copied, so the result stays tidy
+    const at = out.search(/\s*$/)
+    out = `${out.slice(0, at)},${out.slice(at)}`
+  }
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    if (escape) { escape = false; continue }
+    if (quote !== null) {
+      if (ch === '\\') { escape = true; continue }
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"') { quote = ch; continue }
+    if (ch === '{' || ch === '[') { depth += 1; continue }
+    if (ch === '}' || ch === ']') {
+      depth -= 1
+      // a value ended while inside an array, and the next token starts a new
+      // object/array without the separating comma
+      if (ch === '}' && depth === 2) {
+        let j = i + 1
+        while (j < text.length && /\s/.test(text[j])) j += 1
+        if (text[j] === '{' || text[j] === '[') {
+          flushTo(i, true)
+          continue
+        }
+      }
+    }
+  }
+  out += text.slice(emitted)
+  if (out === text) return undefined
+  try {
+    const parsed = JSON.parse(out)
+    return isPlainObject(parsed) ? out : undefined
+  } catch { return undefined }
+}
+
+/**
  * Normalize an untrusted parsed document. Anything that does not match the
  * expected shape is dropped rather than repaired: this file is small, and a
  * half-understood entry is worse than a missing one.
@@ -107,32 +166,77 @@ function normalizeState(raw) {
 function createStore({ logger = console } = {}) {
   let state = emptyState()
   let writeChain = Promise.resolve()
+  let tempSeq = 0
+  /** How the last load went: 'ok' | 'missing' | 'empty' | 'repaired' | 'corrupt'. */
+  let loadStatus = { status: 'ok' }
 
-  function loadSync() {
+  /**
+   * Read + parse + normalize. A corrupt file is never silently swallowed: the
+   * one repairable shape is fixed (keeping the original bytes aside), and
+   * anything else leaves `loadStatus` describing the failure so the UI can say
+   * so instead of showing an empty list as if nothing were configured.
+   */
+  function ingest(rawText) {
+    let parsed
     try {
-      state = normalizeState(JSON.parse(readFileSync(stateFile(), 'utf8')))
+      parsed = JSON.parse(rawText)
     } catch (error) {
-      if (error?.code !== 'ENOENT') {
-        logger.warn?.(`skills-management: MCP state unreadable (${stateFile()}): ${String(error)}; starting empty`)
+      const repaired = repairMissingCommas(rawText)
+      if (repaired === undefined) {
+        loadStatus = { status: 'corrupt', error: String(error?.message ?? error) }
+        logger.warn?.(`skills-management: MCP state unreadable (${stateFile()}): ${loadStatus.error}`)
+        return state
       }
-      state = emptyState()
+      try {
+        parsed = JSON.parse(repaired)
+      } catch {
+        loadStatus = { status: 'corrupt', error: String(error?.message ?? error) }
+        logger.warn?.(`skills-management: MCP state unreadable (${stateFile()}): ${loadStatus.error}`)
+        return state
+      }
+      const backup = `${stateFile()}.corrupt-${Date.now()}.bak`
+      try {
+        writeFileSync(backup, rawText, 'utf8')
+        writeFileSync(stateFile(), repaired, 'utf8')
+        loadStatus = { status: 'repaired', backup }
+        logger.warn?.(`skills-management: MCP state had a missing comma; repaired (original kept at ${backup})`)
+      } catch (error) {
+        loadStatus = { status: 'repaired', backup: undefined, error: String(error?.message ?? error) }
+      }
+    }
+    state = normalizeState(parsed)
+    if (loadStatus.status !== 'repaired') {
+      loadStatus = { status: state.servers.length === 0 && state.disabled.length === 0 ? 'empty' : 'ok' }
     }
     return state
+  }
+
+  function loadSync() {
+    let raw
+    try {
+      raw = readFileSync(stateFile(), 'utf8')
+    } catch (error) {
+      loadStatus = { status: error?.code === 'ENOENT' ? 'missing' : 'corrupt', error: String(error?.message ?? error) }
+      state = emptyState()
+      return state
+    }
+    return ingest(raw)
   }
 
   async function load() {
+    let raw
     try {
-      state = normalizeState(JSON.parse(await fsP.readFile(stateFile(), 'utf8')))
+      raw = await fsP.readFile(stateFile(), 'utf8')
     } catch (error) {
-      if (error?.code !== 'ENOENT') {
-        logger.warn?.(`skills-management: MCP state unreadable (${stateFile()}): ${String(error)}; starting empty`)
-      }
+      loadStatus = { status: error?.code === 'ENOENT' ? 'missing' : 'corrupt', error: String(error?.message ?? error) }
       state = emptyState()
+      return state
     }
-    return state
+    return ingest(raw)
   }
 
   const get = () => state
+  const status = () => loadStatus
 
   /** Replace the whole state and persist; serialized, atomic, never poisons the chain. */
   function replace(next) {
@@ -140,16 +244,30 @@ function createStore({ logger = console } = {}) {
     const snapshot = JSON.stringify(state, null, 2)
     writeChain = writeChain.then(async () => {
       await fsP.mkdir(stateDir(), { recursive: true })
-      const temp = `${stateFile()}.${process.pid}.${Date.now()}.tmp`
+      // unique per write: a bare pid+Date.now() collides when two writes land in
+      // the same millisecond, and a shared temp path defeats the atomic rename
+      tempSeq += 1
+      const temp = `${stateFile()}.${process.pid}.${Date.now()}.${tempSeq}.tmp`
       await fsP.writeFile(temp, snapshot, 'utf8')
-      await fsP.rename(temp, stateFile())
+      try {
+        await fsP.rename(temp, stateFile())
+      } catch (error) {
+        // Windows can refuse a rename onto an existing file; clear the way and
+        // retry once rather than leaving the write half-done
+        if (error?.code === 'EPERM' || error?.code === 'EEXIST' || error?.code === 'EACCES') {
+          await fsP.rm(stateFile(), { force: true })
+          await fsP.rename(temp, stateFile())
+        } else {
+          throw error
+        }
+      }
     }).catch((error) => {
       logger.error?.(`skills-management: MCP state write failed (${stateFile()}): ${String(error)}`)
     })
     return writeChain
   }
 
-  return { load, loadSync, get, replace, file: stateFile(), dir: stateDir() }
+  return { load, loadSync, get, status, replace, file: stateFile(), dir: stateDir() }
 }
 
 // ── validation ──────────────────────────────────────────────────────────
@@ -600,5 +718,6 @@ module.exports = {
   denyNamesForDisabled,
   listServers,
   publicServer,
+  repairMissingCommas,
   __internals: { emptyState, isPlainObject, envRefName },
 }
