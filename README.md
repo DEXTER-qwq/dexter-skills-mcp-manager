@@ -75,7 +75,7 @@ dsh plugin remove dexter-skills-mcp-manager
 
 ## 本地 HTTP 接口
 
-全部挂在 `/skills-management/api` 下，只服务本机（宿主 webServer 路由，没有独立鉴权，也没有 profile 参数 —— 作用对象就是运行中的这个 dsh 实例）：
+界面（浏览器里的 React）没有文件系统权限，也拿不到 DSH 的服务，所以它全靠这些地址跟宿主说话：全部挂在 `/skills-management/api` 下，由插件在宿主 webServer 上注册，作用对象就是运行中的这个 dsh 实例（没有 profile 参数）。
 
 ```
 GET    /skills-management/api                        # 用户库技能列表
@@ -90,6 +90,13 @@ PUT    /skills-management/api/invocation             # {name, modelInvocable}
 GET    /skills-management/api/mcp                    # MCP server 列表（loader + 手写配置）
 PUT    /skills-management/api/mcp                    # {serverName, enabled} 打开/撤回手写里停用的条目
 ```
+
+这些路由**自己没有鉴权**：插件不校验 token / Origin，也不加 CORS 头。实际能不能调取决于宿主的 web 服务器：
+
+- **命令行 `dsh web`**：路由跟着宿主监听地址走（默认 loopback），本机任何进程都能调用它们——包括写接口（收编、删除、改 SKILL.md、改 settings.yaml、开关 MCP）。想让它们只接受来自本页面的请求，需要在插件里加校验。
+- **DSH Desktop**：外壳会给**每一条**插件路由套一层访问门（`DesktopWebServer` 的 `permits()`）：只有携带它每次启动随机生成的渲染进程 header（`x-dsh-desktop-renderer`）的请求能过，其它一律 `403 forbidden`。所以你在普通浏览器里直接打开这些地址会被拒；要看返回的 JSON，在页面里按 F12 打开 DevTools，在 Console 里跑
+  `await (await fetch('/skills-management/api/mcp')).json()`
+  （渲染进程的请求带那个 header，能过）；或者把 Desktop 切到允许普通浏览器访问的模式。
 
 ## 开发
 
