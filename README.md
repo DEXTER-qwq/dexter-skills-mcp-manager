@@ -82,12 +82,34 @@ PUT    /skills-management/api/invocation            # {name, modelInvocable}
 
 ## 安装 / 使用
 
+`dsh plugin add <路径>` 本质是「在 profile 目录里跑 `pnpm add`」，然后把声明了 `dsh.bundle` 的依赖并进该 profile 的 `dsh.profile.bundles`。本地目录会被 pnpm 记成 **`link:` 符号链接**（不是拷贝），所以改完源码不必重装。
+
+DSH Desktop 的 PATH shim 已经预设 `DSH_DESKTOP_DEFAULT_PROFILE=desktop`，直接：
+
 ```bash
-# 在本目录（或在 dsh 的插件目录）以本地路径方式接入：
-dsh plugin --profile web add <本目录绝对路径> -w
+dsh plugin add "D:\11dsh\skills-management"
 ```
 
-装完重启 `dsh web`：**设置** → 左侧「技能管理」即完整管理页。
+若是命令行 dsh（非 Desktop）或想显式指定 profile：
+
+```bash
+dsh plugin --profile desktop add "D:\11dsh\skills-management"
+```
+
+相对路径会被 `dsh` 按**你当前所在目录**展开（pnpm 的 cwd 是 profile 目录），所以用绝对路径最省事。
+
+> 必须用 `add <路径>`，不能用 `npm i`：宿主编译/加载插件时**不执行任何 install 脚本**（正常的工作流就是「装依赖 → 再实例化」，`prepare` 不会跑），所以依赖要在安装前就位。
+> 本 fork 的运行期依赖为 0，`dsh plugin add` 已足够；开发用的 `npm install`（只装 devDeps）是可选步骤。
+
+安装完**重启 DSH**（Desktop 应用重启；CLI 则重启 `dsh web`）。profile 里 `patchReload: live`，之后改 `cordis.patch.yml` 可热生效；而宿主 `src/index.js` 与客户端 `client/bundle.js` 的改动需要**重启 + 刷新页面**。
+
+验证装上了：
+
+```bash
+dsh plugin why @weibaohui/skills-management      # 应显示 link:D:\11dsh\skills-management
+```
+
+然后打开 Web UI → **设置** → 左侧「技能管理」。卸载：`dsh plugin remove @weibaohui/skills-management`。
 
 - 「已安装」视图：执行器卡片 → 钻入看该来源技能 → 安装 / 删除 / 隐藏
 - ⚙ 执行器目录：改目录、停用、新增自定义来源、恢复默认
