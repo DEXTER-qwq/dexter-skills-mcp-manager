@@ -31,7 +31,7 @@
  */
 
 const fsP = require('node:fs/promises')
-const { readFileSync, writeFileSync } = require('node:fs')
+const { readFileSync } = require('node:fs')
 const { join, resolve } = require('node:path')
 const { homedir } = require('node:os')
 
@@ -66,7 +66,10 @@ function dshHome() {
 }
 
 const stateDir = () => join(dshHome(), 'skills-management')
+/** Plugin-owned state: written by the plugin only. Strict JSON. */
 const stateFile = () => join(stateDir(), 'mcp.json')
+/** Hand-written config, one file per user: read by the plugin, NEVER written. */
+const localFile = () => join(stateDir(), 'mcp.local.jsonc')
 
 /** Empty state — also the fallback for a missing or unreadable file. */
 const emptyState = () => ({ version: STATE_VERSION, disabled: [], servers: [] })
@@ -74,62 +77,145 @@ const emptyState = () => ({ version: STATE_VERSION, disabled: [], servers: [] })
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 /**
- * Repair the one corruption we know how to fix: two objects where a comma was
- * lost between them (`} {`), which makes the whole file unparseable and — with
- * a plain fallback — silently empties the user's server list.
+ * Parse a hand-editable JSON document: JSONC comments plus the two separator
+ * mistakes people actually make.
  *
- * Only applied when the text is otherwise balanced, and the result is only
- * accepted if it parses. The original bytes are always copied aside first.
+ * This exists for `mcp.local.jsonc`, the file a human owns, and for tolerating
+ * an older plugin-written `mcp.json` that a human annotated. Three liberties,
+ * all of which are the same liberties VS Code takes on `*.jsonc`:
  *
- * @returns the repaired text, or undefined when this is not that corruption.
+ *  1. `//` line comments and `/* *​/` block comments;
+ *  2. a trailing comma before a closing bracket — what you get after commenting
+ *     out the last element of an array;
+ *  3. a doubled comma `},,`.
+ *
+ * A *lost* comma between two array elements cannot be recovered here (there is
+ * no way to tell `} {` from two adjacent values that were always meant to be
+ * separate), and guessing would silently merge or split a user's servers. That
+ * case is reported instead, with the offset, so it can be fixed by hand.
+ *
+ * The scan is quote- and escape-aware because real values here look like syntax:
+ * Windows paths (`"D:\\tools"`), URLs (`"http://127.0.0.1:13337/mcp"`), and a
+ * literal `//` inside a string must all survive.
+ *
+ * @returns `{ ok: true, value, hadComments }` or
+ *          `{ ok: false, error, hadComments }`.
  */
-function repairMissingCommas(text) {
-  let depth = 0
+function parseJsonc(input) {
+  const text = String(input)
+  let out = ''
+  let hadComments = false
   let quote = null
   let escape = false
-  let out = ''
-  let emitted = 0 // how much of `text` has been copied into `out`
 
-  /** Copy `text` up to and including index `end`, then maybe insert a comma. */
-  const flushTo = (end, insertComma) => {
-    out += text.slice(emitted, end + 1)
-    emitted = end + 1
-    if (!insertComma) return
-    // insert before any whitespace we already copied, so the result stays tidy
-    const at = out.search(/\s*$/)
-    out = `${out.slice(0, at)},${out.slice(at)}`
+  /** Index of the next character that is not whitespace and not a comment. */
+  const nextMeaningful = (from) => {
+    let j = from
+    for (;;) {
+      while (j < text.length && /\s/.test(text[j])) j += 1
+      if (text[j] === '/' && text[j + 1] === '/') {
+        while (j < text.length && text[j] !== '\n') j += 1
+        continue
+      }
+      if (text[j] === '/' && text[j + 1] === '*') {
+        const end = text.indexOf('*/', j + 2)
+        if (end === -1) return { index: -1, char: undefined }
+        j = end + 2
+        continue
+      }
+      return { index: j, char: text[j] }
+    }
   }
 
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i]
-    if (escape) { escape = false; continue }
+    const next = text[i + 1]
+    if (escape) { escape = false; out += ch; continue }
     if (quote !== null) {
-      if (ch === '\\') { escape = true; continue }
+      if (ch === '\\') { escape = true; out += ch; continue }
       if (ch === quote) quote = null
+      out += ch
       continue
     }
-    if (ch === '"') { quote = ch; continue }
-    if (ch === '{' || ch === '[') { depth += 1; continue }
-    if (ch === '}' || ch === ']') {
-      depth -= 1
-      // a value ended while inside an array, and the next token starts a new
-      // object/array without the separating comma
-      if (ch === '}' && depth === 2) {
-        let j = i + 1
-        while (j < text.length && /\s/.test(text[j])) j += 1
-        if (text[j] === '{' || text[j] === '[') {
-          flushTo(i, true)
-          continue
-        }
-      }
+    if (ch === '"') { quote = ch; out += ch; continue }
+    if (ch === '/' && next === '/') {
+      hadComments = true
+      i += 1
+      while (i + 1 < text.length && text[i + 1] !== '\n') i += 1
+      continue
+    }
+    if (ch === '/' && next === '*') {
+      hadComments = true
+      const end = text.indexOf('*/', i + 2)
+      if (end === -1) return { ok: false, hadComments, error: 'unterminated /* comment' }
+      i = end + 1
+      continue
+    }
+    if (ch === ',') {
+      const after = nextMeaningful(i + 1)
+      // trailing before a closer, or doubled → drop it
+      if (after.char === ']' || after.char === '}' || after.char === ',') continue
+    }
+    out += ch
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(out), hadComments }
+  } catch (error) {
+    const offset = Number(/(?:position|at position)\s+(\d+)/.exec(error.message)?.[1] ?? NaN)
+    const hint = Number.isInteger(offset)
+      ? ` near ${JSON.stringify(text.slice(Math.max(0, offset - 30), offset + 12))}`
+      : ''
+    return { ok: false, hadComments, error: `${error.message}${hint}` }
+  }
+}
+
+/**
+ * Read the hand-written config. Anything wrong with it is a status, never a
+ * throw: the plugin must keep working with a broken local file, and the UI has
+ * to be able to say what is wrong.
+ *
+ * @returns `{ servers, file, status, error }` where status is
+ *          'ok' | 'missing' | 'empty' | 'corrupt'. `servers` is always an array.
+ */
+function readLocalConfig(file = localFile()) {
+  let raw
+  try {
+    raw = readFileSync(file, 'utf8')
+  } catch (error) {
+    return { servers: [], file, status: error?.code === 'ENOENT' ? 'missing' : 'corrupt', error: String(error?.message ?? error) }
+  }
+  const parsed = parseJsonc(raw)
+  if (!parsed.ok) return { servers: [], file, status: 'corrupt', error: parsed.error }
+  // Accept both shapes: a bare array, or an object with `servers` (+ optional
+  // `disabled`, so a hand-written file can park an entry without comments).
+  const document = parsed.value
+  const list = Array.isArray(document) ? document
+    : isPlainObject(document) && Array.isArray(document.servers) ? document.servers
+      : undefined
+  if (list === undefined) {
+    return { servers: [], file, status: 'corrupt', error: 'expected an array of servers, or an object with a "servers" array' }
+  }
+  const disabled = new Set(isPlainObject(document) && Array.isArray(document.disabled)
+    ? document.disabled.filter((name) => typeof name === 'string')
+    : [])
+  const servers = []
+  const invalid = []
+  for (const entry of list) {
+    try {
+      const config = validateServerInput(entry)
+      servers.push({ ...config, enabled: entry.enabled !== false && !disabled.has(config.serverName) })
+    } catch (error) {
+      invalid.push({ serverName: isPlainObject(entry) ? entry.serverName : undefined, reason: String(error?.message ?? error) })
     }
   }
-  out += text.slice(emitted)
-  if (out === text) return undefined
-  try {
-    const parsed = JSON.parse(out)
-    return isPlainObject(parsed) ? out : undefined
-  } catch { return undefined }
+  return {
+    servers,
+    file,
+    status: servers.length === 0 && invalid.length === 0 ? 'empty' : 'ok',
+    invalid,
+    hadComments: parsed.hadComments,
+  }
 }
 
 /**
@@ -171,42 +257,26 @@ function createStore({ logger = console } = {}) {
   let loadStatus = { status: 'ok' }
 
   /**
-   * Read + parse + normalize. A corrupt file is never silently swallowed: the
-   * one repairable shape is fixed (keeping the original bytes aside), and
-   * anything else leaves `loadStatus` describing the failure so the UI can say
-   * so instead of showing an empty list as if nothing were configured.
+   * Read + parse + normalize the plugin-owned file.
+   *
+   * Strict JSON is the format this file is written in; JSONC is merely
+   * tolerated on read, because a user may have annotated it before the
+   * hand-written file existed. The tolerance is never written back — that would
+   * silently reformat someone's annotations — so this file stays exactly as it
+   * is found unless the plugin itself has a state change to persist.
    */
   function ingest(rawText) {
-    let parsed
-    try {
-      parsed = JSON.parse(rawText)
-    } catch (error) {
-      const repaired = repairMissingCommas(rawText)
-      if (repaired === undefined) {
-        loadStatus = { status: 'corrupt', error: String(error?.message ?? error) }
-        logger.warn?.(`skills-management: MCP state unreadable (${stateFile()}): ${loadStatus.error}`)
-        return state
-      }
-      try {
-        parsed = JSON.parse(repaired)
-      } catch {
-        loadStatus = { status: 'corrupt', error: String(error?.message ?? error) }
-        logger.warn?.(`skills-management: MCP state unreadable (${stateFile()}): ${loadStatus.error}`)
-        return state
-      }
-      const backup = `${stateFile()}.corrupt-${Date.now()}.bak`
-      try {
-        writeFileSync(backup, rawText, 'utf8')
-        writeFileSync(stateFile(), repaired, 'utf8')
-        loadStatus = { status: 'repaired', backup }
-        logger.warn?.(`skills-management: MCP state had a missing comma; repaired (original kept at ${backup})`)
-      } catch (error) {
-        loadStatus = { status: 'repaired', backup: undefined, error: String(error?.message ?? error) }
-      }
+    const parsed = parseJsonc(rawText)
+    if (!parsed.ok) {
+      loadStatus = { status: 'corrupt', error: parsed.error }
+      logger.warn?.(`skills-management: MCP state unreadable (${stateFile()}): ${loadStatus.error}`)
+      return state
     }
-    state = normalizeState(parsed)
-    if (loadStatus.status !== 'repaired') {
-      loadStatus = { status: state.servers.length === 0 && state.disabled.length === 0 ? 'empty' : 'ok' }
+    state = normalizeState(parsed.value)
+    loadStatus = {
+      status: state.servers.length === 0 && state.disabled.length === 0 ? 'empty' : 'ok',
+      // the file was read through comments/stray commas; it was NOT rewritten
+      tolerated: parsed.hadComments === true ? 'comments' : undefined,
     }
     return state
   }
@@ -517,6 +587,9 @@ function publicServer(record) {
     enabled: record.enabled,
     live: record.live === true,
     removable: record.source === 'user',
+    // true when another source declares this same name: the others are ignored,
+    // because dsh-mcp-client refuses a duplicate serverName
+    alsoDeclared: record.alsoDeclared === true,
     owner: record.ownerPlugin,
     toolCount: record.toolCount ?? 0,
     command: record.command,
@@ -530,22 +603,31 @@ function publicServer(record) {
 }
 
 /**
- * Merge the two universes into the rows the pane shows.
+ * Merge the three universes into the rows the pane shows.
  *
- * Configured servers come from the loader (every composition layer, nothing
- * parsed); user servers come from this plugin's state. The `enabled` flag for a
- * configured server has no home in a config file, so it is remembered here by
- * serverName — that is exactly what the state file's `disabled` list is for.
+ * - **configured** — from the loader (every composition layer, nothing parsed).
+ *   Its `enabled` flag has no home in a config file, so it is remembered by
+ *   serverName in the state file's `disabled` list.
+ * - **local** — the hand-written `mcp.local.jsonc`. The plugin only ever reads
+ *   that file, so a row's own `enabled` field is the truth; the UI shows it
+ *   read-only so annotations can never be invalidated by a toggle.
+ * - **user** — added through this page, stored in the plugin-owned state file.
+ *
+ * A name declared in more than one place resolves in that order, and the shadowed
+ * row is reported (`shadowed: true`) rather than silently dropped — a duplicate
+ * serverName would otherwise make `dsh-mcp-client` fail.
  *
  * @param loader - the loader service (may be absent in a minimal composition).
  * @param state - this plugin's state.
  * @param schemas - `ctx.tools.schemas()`, for per-server tool counts.
+ * @param local - `readLocalConfig()` output, or undefined when unavailable.
  */
-function listServers(loader, state, schemas) {
+function listServers(loader, state, schemas, local) {
   const disabled = new Set(Array.isArray(state?.disabled) ? state.disabled : [])
   const userServers = Array.isArray(state?.servers) ? state.servers : []
+  const localServers = Array.isArray(local?.servers) ? local.servers : []
   const rows = []
-  const seen = new Set()
+  const claimed = new Set()
   const loaderRows = loaderServers(loader)
   // liveness of OUR dynamic mounts comes from their loader entry, so a mount
   // that failed (bad command, port in use) shows as not-live instead of lying
@@ -554,21 +636,62 @@ function listServers(loader, state, schemas) {
     if (entry.owner === 'self') selfMounted.set(entry.config.serverName, entry.live)
   }
 
+  // Exactly one row per serverName, resolved by precedence:
+  //   composed/foreign (innermost truth) > hand-written file > page-added.
+  // The owner map decides the label up front so emission order cannot matter —
+  // a startup mount racing this read used to emit the same name twice, once as
+  // 'local' and once as 'user'.
+  const ownerOf = new Map()
+  for (const server of userServers) ownerOf.set(server.serverName, 'user')
+  for (const server of localServers) ownerOf.set(server.serverName, 'local')
   for (const entry of loaderRows) {
-    const serverName = entry.config.serverName
-    if (entry.owner === 'self' || seen.has(serverName)) continue
-    seen.add(serverName)
-    // a foreign runtime mount is not ours to remove — another plugin owns it
-    const source = entry.owner === 'other' ? 'foreign' : 'configured'
+    if (entry.owner !== 'self') ownerOf.set(entry.config.serverName, entry.owner === 'other' ? 'foreign' : 'configured')
+  }
+  const emitted = new Set()
+  // Which DECLARING sources use each name. Our own loader mounts are excluded:
+  // they are the consequence of a declaration, not a second one.
+  const declaredBy = new Map()
+  const declare = (name, source) => {
+    const set = declaredBy.get(name) ?? new Set()
+    set.add(source)
+    declaredBy.set(name, set)
+  }
+  for (const server of localServers) declare(server.serverName, 'local')
+  for (const server of userServers) declare(server.serverName, 'user')
+  for (const entry of loaderRows) {
+    if (entry.owner === 'self') continue
+    declare(entry.config.serverName, entry.owner === 'other' ? 'foreign' : 'configured')
+  }
+  const push = (record) => {
+    if (emitted.has(record.serverName)) return
+    emitted.add(record.serverName)
     rows.push(publicServer({
+      ...record,
+      alsoDeclared: (declaredBy.get(record.serverName)?.size ?? 0) > 1,
+    }))
+  }
+
+  // A server this plugin mounts also appears in the loader under our own prefix;
+  // its provenance is the file that declared it, so our own loader rows are not
+  // emitted directly — the declaring file's pass below emits them, which is what
+  // gives them the right `source` and its `removable` flag.
+  const ownEntries = new Map()
+  for (const entry of loaderRows) {
+    if (entry.owner === 'self') ownEntries.set(entry.config.serverName, entry)
+  }
+
+  // 1) rows we do not own: composed and other plugins'
+  for (const entry of loaderRows) {
+    if (entry.owner === 'self') continue
+    push({
       id: entry.id,
-      serverName,
-      source,
+      serverName: entry.config.serverName,
+      source: entry.owner === 'other' ? 'foreign' : 'configured',
       ownerPlugin: entry.plugin,
       transport: entry.config.transport === 'streamable-http' ? 'streamable-http' : 'stdio',
-      enabled: !disabled.has(serverName),
+      enabled: !disabled.has(entry.config.serverName),
       live: entry.live,
-      toolCount: toolsOfServer(schemas, serverName).length,
+      toolCount: toolsOfServer(schemas, entry.config.serverName).length,
       command: entry.config.command,
       args: entry.config.args,
       env: entry.config.env,
@@ -576,19 +699,20 @@ function listServers(loader, state, schemas) {
       url: entry.config.url,
       headers: entry.config.headers,
       toolCallTimeoutMs: entry.config.toolCallTimeoutMs,
-    }))
+    })
   }
 
-  for (const server of userServers) {
-    if (seen.has(server.serverName)) continue
-    seen.add(server.serverName)
-    rows.push(publicServer({
-      id: MANAGED_ENTRY_PREFIX + server.serverName,
+  // 2) the hand-written file
+  for (const server of localServers) {
+    if (ownerOf.get(server.serverName) !== 'local') continue
+    const own = ownEntries.get(server.serverName)
+    push({
+      id: own === undefined ? `local:${server.serverName}` : own.id,
       serverName: server.serverName,
-      source: 'user',
+      source: 'local',
       transport: server.transport,
       enabled: server.enabled !== false,
-      live: selfMounted.get(server.serverName) === true,
+      live: own !== undefined && own.live,
       toolCount: toolsOfServer(schemas, server.serverName).length,
       command: server.command,
       args: server.args,
@@ -597,11 +721,74 @@ function listServers(loader, state, schemas) {
       url: server.url,
       headers: server.headers,
       toolCallTimeoutMs: server.toolCallTimeoutMs,
-    }))
+    })
+  }
+
+  // 3) servers added on this page
+  for (const server of userServers) {
+    if (ownerOf.get(server.serverName) !== 'user') continue
+    const own = ownEntries.get(server.serverName)
+    push({
+      id: own === undefined ? MANAGED_ENTRY_PREFIX + server.serverName : own.id,
+      serverName: server.serverName,
+      source: 'user',
+      transport: server.transport,
+      enabled: server.enabled !== false,
+      live: own !== undefined && own.live,
+      toolCount: toolsOfServer(schemas, server.serverName).length,
+      command: server.command,
+      args: server.args,
+      env: server.env,
+      cwd: server.cwd,
+      url: server.url,
+      headers: server.headers,
+      toolCallTimeoutMs: server.toolCallTimeoutMs,
+    })
+  }
+
+  // 4) a mounted entry with no declaring row left (state edited by hand) is still
+  // reported, so a live server can never become invisible
+  for (const entry of ownEntries.values()) {
+    push({
+      id: entry.id,
+      serverName: entry.config.serverName,
+      source: 'user',
+      transport: entry.config.transport === 'streamable-http' ? 'streamable-http' : 'stdio',
+      enabled: true,
+      live: entry.live,
+      toolCount: toolsOfServer(schemas, entry.config.serverName).length,
+      command: entry.config.command,
+      args: entry.config.args,
+      env: entry.config.env,
+      cwd: entry.config.cwd,
+      url: entry.config.url,
+      headers: entry.config.headers,
+      toolCallTimeoutMs: entry.config.toolCallTimeoutMs,
+    })
   }
 
   rows.sort((a, b) => a.serverName.localeCompare(b.serverName))
   return rows
+}
+
+/**
+ * Every server that should be mounted, deduplicated by name and in the same
+ * precedence order as {@link listServers}: composed rows already exist in the
+ * loader, so only local and user rows are returned here — with `source` so the
+ * caller knows which ones it owns and may unmount.
+ */
+function mountableServers(state, local) {
+  const out = []
+  const seen = new Set()
+  for (const [source, list] of [['local', local?.servers], ['user', state?.servers]]) {
+    for (const server of Array.isArray(list) ? list : []) {
+      if (server.enabled === false) continue
+      if (seen.has(server.serverName)) continue
+      seen.add(server.serverName)
+      out.push({ ...server, source })
+    }
+  }
+  return out
 }
 
 /**
@@ -702,6 +889,7 @@ module.exports = {
   dshHome,
   stateDir,
   stateFile,
+  localFile,
   createStore,
   normalizeState,
   validateServerInput,
@@ -714,10 +902,12 @@ module.exports = {
   entryOwner,
   mountedBy,
   readImportCandidates,
+  readLocalConfig,
+  parseJsonc,
   toolsOfServer,
   denyNamesForDisabled,
   listServers,
+  mountableServers,
   publicServer,
-  repairMissingCommas,
   __internals: { emptyState, isPlainObject, envRefName },
 }

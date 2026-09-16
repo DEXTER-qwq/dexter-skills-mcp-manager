@@ -107,7 +107,109 @@ test('writes are atomic: no temp file is left behind', async () => {
   })
 })
 
-// ── corruption: report it, repair the one fixable shape, never hide it ──
+// ── the JSONC reader ────────────────────────────────────────────────────
+
+test('parseJsonc accepts comments both ways and leaves strings alone', () => {
+  const doc = [
+    '{',
+    '  // a line comment, with a quote in it: "',
+    '  "servers": [',
+    '    { "name": "a" }, // trailing comment',
+    '    /* block',
+    '       comment */',
+    '    { "name": "b" },',
+    '  ]',
+    '}',
+  ].join('\n')
+  const parsed = mcpManager.parseJsonc(doc)
+  assert.equal(parsed.ok, true)
+  assert.equal(parsed.hadComments, true)
+  assert.deepEqual(parsed.value.servers.map((s) => s.name), ['a', 'b'], 'trailing comma is tolerated too')
+})
+
+test('parseJsonc does not mistake comment-like text inside strings for syntax', () => {
+  const doc = JSON.stringify({
+    servers: [
+      { url: 'http://127.0.0.1:13337/mcp', path: 'D:\\tools\\a', note: 'a // b', other: '/* not a comment */' },
+    ],
+  })
+  const parsed = mcpManager.parseJsonc(doc)
+  assert.equal(parsed.ok, true)
+  assert.equal(parsed.hadComments, false, 'no comment was actually stripped')
+  assert.deepEqual(parsed.value.servers[0], {
+    url: 'http://127.0.0.1:13337/mcp',
+    path: 'D:\\tools\\a',
+    note: 'a // b',
+    other: '/* not a comment */',
+  })
+})
+
+test('parseJsonc reports what it cannot fix instead of guessing', () => {
+  // a lost comma cannot be told apart from two adjacent values — refuse it
+  const lost = '{\n  "servers": [\n    { "a": 1 }\n    { "a": 2 }\n  ]\n}'
+  const parsed = mcpManager.parseJsonc(lost)
+  assert.equal(parsed.ok, false)
+  assert.ok(parsed.error.length > 0)
+  // an unterminated block comment is named as such
+  assert.match(mcpManager.parseJsonc('{ /* oops').error, /unterminated/)
+  assert.equal(mcpManager.parseJsonc('not json at all').ok, false)
+})
+
+// ── the plugin-owned state file ─────────────────────────────────────────
+
+test('missing and empty are distinct statuses', async () => {
+  await withHome(async () => {
+    const missing = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    missing.loadSync()
+    assert.equal(missing.status().status, 'missing')
+
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    store.loadSync()
+    await store.replace({ version: 1, disabled: [], servers: [] })
+    const reopened = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    reopened.loadSync()
+    assert.equal(reopened.status().status, 'empty')
+  })
+})
+
+test('an annotated plugin state file is read through and NOT rewritten', async () => {
+  await withHome(async (home) => {
+    const dir = join(home, 'skills-management')
+    await mkdir(dir, { recursive: true })
+    const annotated = [
+      '{',
+      '  "version": 1,',
+      '  // note to self: keep this file tidy',
+      '  "disabled": ["a"],',
+      '  "servers": [{ "serverName": "one", "transport": "stdio", "command": "c" }],',
+      '}',
+    ].join('\n')
+    await writeFile(join(dir, 'mcp.json'), annotated)
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    const state = store.loadSync()
+    assert.deepEqual(state.servers.map((s) => s.serverName), ['one'])
+    assert.deepEqual(state.disabled, ['a'])
+    assert.equal(store.status().status, 'ok')
+    assert.equal(store.status().tolerated, 'comments')
+    // the annotations survive: reading never rewrites
+    assert.equal(await readFile(join(dir, 'mcp.json'), 'utf8'), annotated)
+  })
+})
+
+test('an unreadable plugin state file is reported instead of silently emptying the list', async () => {
+  await withHome(async (home) => {
+    const dir = join(home, 'skills-management')
+    await mkdir(dir, { recursive: true })
+    const junk = '{"servers": [ this is not json'
+    await writeFile(join(dir, 'mcp.json'), junk)
+    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
+    assert.deepEqual(store.loadSync().servers, [])
+    const status = store.status()
+    assert.equal(status.status, 'corrupt')
+    assert.ok(status.error.length > 0, 'the parse error is carried for the UI')
+    assert.equal(await readFile(join(dir, 'mcp.json'), 'utf8'), junk, 'the damaged file is left as found')
+  })
+})
 
 test('two writes in the same millisecond must not share a temp path', async () => {
   await withHome(async (home) => {
@@ -122,60 +224,6 @@ test('two writes in the same millisecond must not share a temp path', async () =
     assert.deepEqual(state.servers.map((s) => s.serverName), ['two'], 'the last write wins, and it is valid JSON')
     const entries = await (await import('node:fs/promises')).readdir(join(home, 'skills-management'))
     assert.deepEqual(entries, ['mcp.json'])
-  })
-})
-
-test('repairMissingCommas fixes the one shape it claims to, and nothing else', () => {
-  const broken = '{\n  "servers": [\n    {\n      "a": 1\n    }\n    {\n      "a": 2\n    }\n  ]\n}'
-  const fixed = mcpManager.repairMissingCommas(broken)
-  assert.notEqual(fixed, undefined)
-  assert.deepEqual(JSON.parse(fixed).servers, [{ a: 1 }, { a: 2 }])
-  // already valid → untouched
-  assert.equal(mcpManager.repairMissingCommas('{"a":1}'), undefined)
-  // braces and escaped quotes inside strings must not confuse the scanner
-  const withBraces = '{\n  "servers": [\n    {\n      "c": "a } b { c \\" x"\n    }\n    {\n      "c": "d"\n    }\n  ]\n}'
-  const fixed2 = mcpManager.repairMissingCommas(withBraces)
-  assert.deepEqual(JSON.parse(fixed2).servers.map((s) => s.c), ['a } b { c " x', 'd'])
-  // genuinely broken in another way → refused, not guessed at
-  assert.equal(mcpManager.repairMissingCommas('{ "a": '), undefined)
-  assert.equal(mcpManager.repairMissingCommas('not json at all'), undefined)
-})
-
-test('a corrupt state file is repaired, backed up, and reported', async () => {
-  await withHome(async (home) => {
-    const dir = join(home, 'skills-management')
-    await mkdir(dir, { recursive: true })
-    const good = '{\n  "version": 1,\n  "disabled": [],\n  "servers": [\n    {\n      "serverName": "one",\n      "transport": "stdio",\n      "command": "c"\n    }\n  ]\n}'
-    // the exact damage seen in the wild: a missing comma between two objects
-    const damaged = good.replace('\n  ]\n}', ',\n    {\n      "serverName": "two",\n      "transport": "stdio",\n      "command": "c"\n    }\n  ]\n}')
-      .replace('    },\n', '    }\n')
-    await writeFile(join(dir, 'mcp.json'), damaged)
-
-    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
-    const state = store.loadSync()
-    assert.deepEqual(state.servers.map((s) => s.serverName), ['one', 'two'], 'both servers survive the repair')
-    const status = store.status()
-    assert.equal(status.status, 'repaired')
-    assert.ok(status.backup.endsWith('.bak'), 'the original bytes are kept aside')
-    assert.equal(await readFile(status.backup, 'utf8'), damaged, 'the backup is the original text')
-
-    const onDisk = JSON.parse(await readFile(join(dir, 'mcp.json'), 'utf8'))
-    assert.deepEqual(onDisk.servers.map((s) => s.serverName), ['one', 'two'])
-  })
-})
-
-test('an unrepairable state file is reported instead of silently emptying the list', async () => {
-  await withHome(async (home) => {
-    const dir = join(home, 'skills-management')
-    await mkdir(dir, { recursive: true })
-    const junk = '{"servers": [ this is not json'
-    await writeFile(join(dir, 'mcp.json'), junk)
-    const store = mcpManager.createStore({ logger: { warn() {}, error() {} } })
-    assert.deepEqual(store.loadSync().servers, [])
-    const status = store.status()
-    assert.equal(status.status, 'corrupt')
-    assert.ok(status.error.length > 0, 'the parse error is carried for the UI')
-    assert.equal(await readFile(join(dir, 'mcp.json'), 'utf8'), junk, 'the damaged file is left as found')
   })
 })
 
@@ -746,6 +794,70 @@ test('import can be told to take only some of the candidates', async () => {
   })
 })
 
+test('the hand-written local file is mounted at startup and shown read-only', async () => {
+  await withHome(async (home) => {
+    const dir = join(home, 'skills-management')
+    await mkdir(dir, { recursive: true })
+    // plugin-owned state: one server added on the page, with the same name as a
+    // local one so the precedence rule is exercised
+    await writeFile(join(dir, 'mcp.json'), JSON.stringify({
+      version: 1,
+      disabled: [],
+      servers: [{ serverName: 'clash', transport: 'stdio', command: 'from-state' }],
+    }, null, 2))
+    const localText = [
+      '{',
+      '  // hand-written, with a comment — the plugin must never rewrite this',
+      '  "servers": [',
+      '    { "serverName": "jads", "transport": "stdio", "command": "loc", "args": ["--x"] },',
+      '    { "serverName": "clash", "transport": "stdio", "command": "from-local" },',
+      '  ]',
+      '}',
+    ].join('\n')
+    await writeFile(join(dir, 'mcp.local.jsonc'), localText)
+
+    const { call, created } = setupWithRoutes()
+    const got = await call('GET', '/skills-management/api/mcp')
+    assert.equal(got.status, 200)
+    assert.equal(got.payload.localStatus, 'ok')
+    const byName = Object.fromEntries(got.payload.servers.map((s) => [s.serverName, s]))
+    // exactly one row per name, and the hand-written file wins
+    assert.deepEqual(got.payload.servers.map((s) => s.serverName), ['clash', 'jads'])
+    assert.equal(byName.jads.source, 'local')
+    assert.equal(byName.jads.removable, false)
+    assert.equal(byName.clash.source, 'local')
+    assert.equal(byName.clash.command, 'from-local')
+    // and the duplicate declaration is flagged rather than hidden
+    assert.equal(byName.clash.alsoDeclared, true)
+    assert.equal(byName.jads.alsoDeclared, false)
+
+    // both local servers were mounted under our own prefix
+    assert.deepEqual(created.map((c) => c.id).sort(), ['sm-mcp-clash', 'sm-mcp-jads'])
+
+    // toggling a local row is refused: that file is not ours to change
+    const toggled = await call('PUT', '/skills-management/api/mcp', { serverName: 'jads', enabled: false })
+    assert.equal(toggled.status, 409)
+    assert.match(toggled.payload.error, /hand-written config file/)
+
+    // and the annotations are byte-for-byte intact after all of that
+    assert.equal(await readFile(join(dir, 'mcp.local.jsonc'), 'utf8'), localText)
+  })
+})
+
+test('a broken hand-written file is reported and never blocks the plugin', async () => {
+  await withHome(async (home) => {
+    const dir = join(home, 'skills-management')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'mcp.local.jsonc'), '{ "servers": [ /* unterminated')
+    const { call } = setupWithRoutes()
+    const got = await call('GET', '/skills-management/api/mcp')
+    assert.equal(got.status, 200)
+    assert.equal(got.payload.localStatus, 'corrupt')
+    assert.match(got.payload.localError, /unterminated/)
+    assert.deepEqual(got.payload.servers, [])
+  })
+})
+
 test('with no loader/tools services the pane still reports state instead of failing', async () => {
   await withHome(async () => {
     let handler
@@ -767,5 +879,6 @@ test('with no loader/tools services the pane still reports state instead of fail
     const payload = JSON.parse(out.body)
     assert.equal(payload.loaderAvailable, false)
     assert.deepEqual(payload.servers, [])
+    assert.equal(payload.localStatus, 'missing')
   })
 })

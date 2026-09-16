@@ -1,0 +1,48 @@
+// 手写 MCP 配置模板
+//
+// 复制到  ~/.dsh/skills-management/mcp.local.jsonc  即可生效（改完重启 dsh）。
+//
+// 这个文件**只被读取，从不被改写**，所以：
+//   - 注释安全：// 行注释 与 /* 块注释 */  都可以用
+//   - 尾随逗号安全：数组/对象最后一项后面留个逗号也没问题
+//   - 你在 UI 里开关别的 MCP server 不会动到这个文件
+//
+// 顶层可以是数组，也可以是 {"servers": [...]}（下面用的是后者）。
+// 不需要的条目用 "enabled": false，或者直接注释掉整块。
+{
+  "servers": [
+    // 方式一：本机启动一个程序（stdio）
+    {
+      "serverName": "my-stdio-server",   // 必填，成为工具名前缀 mcp__<这个名字>__<工具名>
+                                         // 只允许字母数字、下划线、连字符，≤32 字符
+      "transport": "stdio",
+      "command": "npx",                  // 必填
+      "args": ["-y", "some-mcp-server"], // 一行一个参数
+      "env": {                           // 可选；KEY=${VAR} 表示读宿主环境变量，不落盘明文
+        "SOME_TOKEN": "${SOME_TOKEN}",
+        "PLAIN_VALUE": "literal"
+      },
+      "cwd": "",                         // 可选，工作目录
+      "toolCallTimeoutMs": 60000         // 可选，工具调用超时（毫秒）
+    },
+
+    // 方式二：连远端地址（streamable-http）
+    {
+      "serverName": "my-http-server",
+      "transport": "streamable-http",
+      "url": "http://127.0.0.1:13337/mcp", // 必填，必须 http/https
+      "headers": {                        // 可选
+        "Authorization": "Bearer ${MY_TOKEN}"
+      },
+      "toolCallTimeoutMs": 30000
+    },
+
+    // 暂时不用、想留着的条目：整块注释掉就行（这正是它和 mcp.json 的区别）
+    // {
+    //   "serverName": "parked-server",
+    //   "transport": "stdio",
+    //   "command": "python",
+    //   "args": ["D:\\tools\\parked.py"]
+    // },
+  ]
+}

@@ -45,6 +45,17 @@ DSH 插件 · **技能管理 + MCP 管理**：一个页面管理**本机**所有
 
 停用状态按 `serverName` 记住，所以对「配置来源」的 server 也有效——这正是它不需要改配置文件的原因。`apply()` 保持**同步**（Cordis 把带 prototype 的函数当构造函数、会忽略返回的 promise，async apply 里 await 之后抛错会变成 unhandled rejection 并可能拖垮进程），异步的挂载都在事件回调或请求里做。
 
+#### 两个文件，各归其主
+
+| 文件 | 谁写 | 格式 |
+| --- | --- | --- |
+| `~/.dsh/skills-management/mcp.json` | **只有插件写**（开关、本页新增/删除、导入） | 严格 JSON。读取时容忍注释，但**绝不把容忍结果写回** |
+| `~/.dsh/skills-management/mcp.local.jsonc` | **只有你写**，插件只读、从不改写 | JSONC：`//`、`/* */`、尾随逗号都可以 |
+
+想给 MCP 配置写注释、把不用的条目注释掉留档,就写进 `mcp.local.jsonc`——UI 里的任何开关都不会碰这个文件。模板见 [`docs/mcp.local.example.jsonc`](docs/mcp.local.example.jsonc);改完**重启 dsh** 生效（本插件不做文件监听）。
+
+同名冲突规则:**dsh 组合 > 手写文件 > 本页新增**,只挂载优先级最高的那条(`dsh-mcp-client` 会拒绝重复的 `serverName`),一个名字在列表里只出现一行并标出「有同名声明」。手写文件里的条目在本页是**只读**的(开关返回 409)——要改就改那个文件再重启。
+
 > 要是宿主缺少 `loader` / `tools` 服务（最小组合），页面会显示「能力不可用」而不是报错，并照常列出当前状态。
 
 ## 改造说明（相对上游 0.6.1 删掉了什么）

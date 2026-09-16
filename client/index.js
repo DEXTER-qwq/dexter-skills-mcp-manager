@@ -237,6 +237,15 @@ const ZH = {
   mcpEmpty: '还没有 MCP server。这里会列出所有已配置的 server；也可以自己新增一条。',
   mcpLoading: '正在读取 MCP 状态…',
   mcpStateFile: '状态文件',
+  mcpLocalFile: '手写配置',
+  mcpLocalHint: '这个文件插件只读、从不改写，所以可以放心写注释（// 与 /* */）和尾随逗号。改完重启 dsh 生效。',
+  mcpLocalMissing: '{file} 还不存在 —— 想要一份带注释的配置就新建它。',
+  mcpLocalCorrupt: '手写配置无法解析：{error}',
+  mcpLocalInvalid: '手写配置里有 {n} 条不合法，已被跳过',
+  mcpSourceLocal: '手写配置',
+  mcpLocalRowHint: '这条来自手写配置文件，本页不修改它 —— 要改就编辑那个文件再重启。',
+  mcpShadowedTag: '有同名声明',
+  mcpShadowedHint: '这个名字在别处也声明了。为保证不冲突，只会挂载上面这条；别处那份被忽略。删掉多余的那份可消除此提示。',
   mcpStateRepaired: '状态文件里少了个逗号，已自动修好；原始内容备份在 {backup}',
   mcpStateCorrupt: '状态文件无法解析：{error} —— 下面的列表不完整。修好或删掉该文件后点「刷新」。',
   mcpImportOnlyTaken: '可以导入，但同名 server 仍被那个插件挂着 —— 先在插件列表里停用它，点上面的「刷新」，再回来导入。',
@@ -390,6 +399,15 @@ const EN = {
   mcpSourceConfigured: 'configured',
   mcpSourceUser: 'added here',
   mcpSourceForeign: 'mounted by another plugin',
+  mcpSourceLocal: 'hand-written',
+  mcpLocalFile: 'Hand-written config',
+  mcpLocalHint: 'This file is only ever read, never rewritten, so comments (// and /* */) and trailing commas are safe in it. Restart dsh after editing.',
+  mcpLocalMissing: '{file} does not exist yet — create it if you want a config you can annotate.',
+  mcpLocalCorrupt: 'The hand-written config cannot be parsed: {error}',
+  mcpLocalInvalid: '{n} entries in the hand-written config are invalid and were skipped',
+  mcpLocalRowHint: 'This row comes from the hand-written config, which this page never modifies — edit that file and restart instead.',
+  mcpShadowedTag: 'duplicate name',
+  mcpShadowedHint: 'This name is declared somewhere else too. Only the row above is mounted, because a duplicate serverName would break the MCP client; the other declaration is ignored.',
   mcpForeignHint: 'Another plugin mounted this row at runtime, so this page leaves it alone. When that plugin is disabled it removes its own entry and the server disappears with it — to take ownership here: disable that plugin first, then use “Import from another plugin”.',
   mcpImport: 'Import from another plugin',
   mcpImportTitle: 'Import MCP servers',
@@ -1486,12 +1504,14 @@ function McpServerCard({ t, row, onEdit, onToggle, onDelete, busy, canEdit }) {
   const summary = isStdio ? [row.command, ...(row.args || [])].join(' ') : row.url
   const removable = row.source === 'user'
   const sourceLabel = row.source === 'user' ? t('mcpSourceUser')
-    : row.source === 'foreign' ? t('mcpSourceForeign') : t('mcpSourceConfigured')
+    : row.source === 'foreign' ? t('mcpSourceForeign')
+      : row.source === 'local' ? t('mcpSourceLocal') : t('mcpSourceConfigured')
   return h('div', { className: 'sk-card', style: { cursor: 'default' } },
     h('div', { className: 'sk-head' },
       h(Avatar, { name: row.serverName || row.entryId, square: true, size: 40 }),
       h('span', { className: 'sk-title' }, row.serverName || row.entryId),
       h(Tag, { tone: row.source === 'foreign' ? 'danger' : 'accent' }, sourceLabel),
+      row.alsoDeclared === true && h(Tag, { tone: 'danger' }, t('mcpShadowedTag')),
       row.owner && h(Tag, null, row.owner),
       h(Tag, { tone: 'accent' }, row.transport),
       row.enabled === false && h(Tag, { tone: 'danger' }, t('mcpDisabledTag')),
@@ -1507,13 +1527,17 @@ function McpServerCard({ t, row, onEdit, onToggle, onDelete, busy, canEdit }) {
         isStdio && row.cwd ? row.cwd : null,
         typeof row.toolCallTimeoutMs === 'number' ? `${row.toolCallTimeoutMs} ms` : null,
       ].filter(Boolean).join(' · ')),
-    row.source === 'foreign'
-      ? h('div', { style: fieldHintStyle() }, t('mcpForeignHint'))
-      : row.source === 'configured' && h('div', { style: fieldHintStyle() }, t('mcpConfiguredHint')),
+    row.alsoDeclared === true
+      ? h('div', { style: fieldHintStyle() }, t('mcpShadowedHint'))
+      : row.source === 'foreign'
+        ? h('div', { style: fieldHintStyle() }, t('mcpForeignHint'))
+        : row.source === 'local'
+          ? h('div', { style: fieldHintStyle() }, t('mcpLocalRowHint'))
+          : row.source === 'configured' && h('div', { style: fieldHintStyle() }, t('mcpConfiguredHint')),
     h('div', { className: 'sk-foot' },
       h('div', { className: 'sk-chips' }, h('span', { className: 'sk-dir' }, row.entryId)),
       h('div', { className: 'sk-rowbtns' },
-        h(ButtonLite, { small: true, disabled: busy,
+        row.source !== 'local' && h(ButtonLite, { small: true, disabled: busy,
           onClick: () => onToggle(row) }, row.enabled === false ? t('mcpEnable') : t('mcpDisable')),
         canEdit && removable && h(ButtonLite, { small: true, disabled: busy,
           onClick: () => onEdit(row) }, t('mcpEdit')),
@@ -1677,6 +1701,13 @@ function McpPane({ t, onToast }) {
       h(ButtonLite, { onClick: openImport, disabled: busy || !canMount }, t('mcpImport')),
       h(ButtonLite, { primary: true, disabled: busy || !canMount, onClick: () => setDialog({ row: null }) }, t('mcpAdd'))),
     h('div', { className: 'sk-hint' }, `${t('mcpStateFile')}: ${data.stateFile || '-'}`),
+    h('div', { className: 'sk-hint' },
+      `${t('mcpLocalFile')}: ${data.localFile || '-'}${data.localStatus === 'missing' ? ` — ${t('mcpLocalMissing', { file: '' })}` : ''}`),
+    h('div', { className: 'sk-hint' }, t('mcpLocalHint')),
+    data.localStatus === 'corrupt' && h('div', { className: 'sk-tag danger', style: { alignSelf: 'flex-start', whiteSpace: 'pre-wrap' } },
+      t('mcpLocalCorrupt', { error: data.localError || '?' })),
+    (data.localInvalid || []).length > 0 && h('div', { className: 'sk-tag danger', style: { alignSelf: 'flex-start' } },
+      t('mcpLocalInvalid', { n: data.localInvalid.length })),
     data.stateStatus === 'repaired' && h('div', { className: 'sk-tag', style: { alignSelf: 'flex-start' } },
       t('mcpStateRepaired', { backup: data.stateBackup || '-' })),
     data.stateStatus === 'corrupt' && h('div', { className: 'sk-tag danger', style: { alignSelf: 'flex-start', whiteSpace: 'pre-wrap' } },

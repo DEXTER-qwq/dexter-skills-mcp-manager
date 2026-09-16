@@ -782,12 +782,21 @@ module.exports = {
       mountedMcp.delete(serverName)
     }
 
-    /** 启动时把用户新增且启用的 server 挂回来（状态跨会话保留）。 */
+    /**
+     * Mount every enabled server this plugin owns — the hand-written file's plus
+     * the ones added on the page — and unmount the ones no longer wanted.
+     * Called at startup and after any state change.
+     */
     async function syncUserMcpMounts() {
       const loader = serviceOf('loader')
       if (loader === undefined) return
-      for (const server of mcpStore.get().servers ?? []) {
-        if (server.enabled === false) continue
+      const wanted = mcpManager.mountableServers(mcpStore.get(), mcpManager.readLocalConfig())
+      const wantedNames = new Set(wanted.map((server) => server.serverName))
+      // drop mounts whose entry is gone (deleted by hand, or its file changed)
+      for (const serverName of [...mountedMcp.keys()]) {
+        if (!wantedNames.has(serverName)) await unmountMcpServer(serverName)
+      }
+      for (const server of wanted) {
         try { await mountMcpServer(server) } catch (error) {
           ctx.logger.warn(`skills-management: mount of '${server.serverName}' failed: ${error && error.message}`)
         }
@@ -829,9 +838,14 @@ module.exports = {
       const loader = serviceOf('loader')
       const state = mcpStore.get()
       const stateStatus = typeof mcpStore.status === 'function' ? mcpStore.status() : { status: 'ok' }
+      const local = mcpManager.readLocalConfig()
       return {
-        servers: mcpManager.listServers(loader, state, schemas),
+        servers: mcpManager.listServers(loader, state, schemas, local),
         stateFile: displayPath(mcpManager.stateFile()),
+        localFile: displayPath(local.file),
+        localStatus: local.status,
+        localError: local.error,
+        localInvalid: local.invalid,
         // 'corrupt' means the list below is NOT the whole truth — the page must say so
         stateStatus: stateStatus.status,
         stateError: stateStatus.error,
@@ -1371,8 +1385,16 @@ module.exports = {
                 return
               }
               const serverName = body.serverName
-              const known = mcpSnapshot().servers.some((server) => server.serverName === serverName)
-              if (!known) { sendJson(res, 404, { error: `MCP server '${serverName}' is not known` }); return }
+              const row = mcpSnapshot().servers.find((server) => server.serverName === serverName)
+              if (row === undefined) { sendJson(res, 404, { error: `MCP server '${serverName}' is not known` }); return }
+              // a hand-written row's own `enabled` is the truth, and that file is
+              // not ours to write — a toggle here would only create a lie in our state
+              if (row.source === 'local') {
+                sendJson(res, 409, {
+                  error: `MCP server '${serverName}' comes from the hand-written config file; set its "enabled" there and restart`,
+                })
+                return
+              }
               const result = await withMcpLock(async () => {
                 const state = mcpStore.get()
                 const disabled = new Set(disabledServerNames())
