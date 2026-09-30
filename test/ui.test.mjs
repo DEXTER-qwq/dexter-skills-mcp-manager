@@ -10,7 +10,7 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const plugin = require('../client/index.js')
-const { NS, ZH, EN, matchSkill, formatSize } = plugin.__internals
+const { NS, ZH, EN, matchSkill, formatSize, markdownLabels } = plugin.__internals
 
 test('client module declares slots + locale injects', () => {
   assert.equal(plugin.name, 'dexter-skills-mcp-manager') // must equal the boot manifest id
@@ -82,6 +82,39 @@ test('matchSkill covers name/description/keywords case-insensitively', () => {
   assert.ok(matchSkill(skill, '表格'))
   assert.ok(matchSkill(skill, 'feishu'))
   assert.equal(matchSkill(skill, 'codex'), false)
+})
+
+// ── MarkdownText labels contract ────────────────────────────────────────
+//
+// Regression guard for the white-screen bug: the host's MarkdownText reads
+// `context.labels.code.copyLabel` (and `labels.footnotes`) with no default, so
+// rendering any skill whose SKILL.md has one non-empty fenced code block threw
+// inside the primitive, escaped every try/catch of ours, and got the settings
+// slot entry abdicated (blank page, unrecoverable until restart).
+
+test('markdownLabels carries every field the host renderer dereferences', () => {
+  const labels = markdownLabels((key) => `T:${key}`)
+  // renderCode(): context.labels.code.copyLabel / .copiedLabel / .toolbarLabels
+  assert.equal(labels.code.copyLabel, 'T:codeCopy')
+  assert.equal(labels.code.copiedLabel, 'T:codeCopied')
+  // CodeToolbar (labels.toolbarLabels): codeLabel / wrapLabel / unwrapLabel
+  assert.equal(labels.code.toolbarLabels.codeLabel, 'T:codeLabel')
+  assert.equal(labels.code.toolbarLabels.wrapLabel, 'T:codeWrap')
+  assert.equal(labels.code.toolbarLabels.unwrapLabel, 'T:codeUnwrap')
+  // renderFootnoteSection(): context.labels.footnotes
+  assert.equal(labels.footnotes, 'T:footnotes')
+})
+
+test('every MarkdownText call site passes labels', () => {
+  const src = readFileSync(new URL('../client/index.js', import.meta.url), 'utf8')
+  const calls = [...src.matchAll(/h\(\s*MarkdownText\s*,\s*\{([\s\S]{0,200}?)\}\s*\)/g)]
+  assert.ok(calls.length >= 2, `expected the detail preview to render markdown, saw ${calls.length} call sites`)
+  for (const [, props] of calls) {
+    assert.match(props, /\blabels\s*:/, `MarkdownText call without labels: {${props.trim()}}`)
+  }
+  // and the host primitive is resolved through the null-able constant, never
+  // through prim() (whose shim is always truthy and would defeat the <pre> arm)
+  assert.ok(!src.includes("prim('MarkdownText')"), 'prim() must not gate the markdown preview')
 })
 
 // ── MCP pane copy ───────────────────────────────────────────────────────

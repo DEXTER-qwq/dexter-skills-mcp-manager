@@ -161,6 +161,12 @@ const ZH = {
   invocationHint: '关闭后技能保留在库里，但不再注入对话目录（skill 工具也调不到）',
   pathLabel: '路径',
   meTag: '本机',
+  codeCopy: '复制',
+  codeCopied: '已复制',
+  codeLabel: '代码',
+  codeWrap: '自动换行',
+  codeUnwrap: '取消自动换行',
+  footnotes: '脚注',
 }
 
 const EN = {
@@ -262,6 +268,12 @@ const EN = {
   invocationHint: 'When off, the skill stays in the library but is not injected into conversation catalogs',
   pathLabel: 'Path',
   meTag: 'me',
+  codeCopy: 'Copy',
+  codeCopied: 'Copied',
+  codeLabel: 'Code',
+  codeWrap: 'Wrap lines',
+  codeUnwrap: 'No wrap',
+  footnotes: 'Footnotes',
 }
 
 // ── Pure helpers ────────────────────────────────────────────────────────
@@ -377,6 +389,41 @@ async function getJson(url) {
   const r = await fetch(url)
   if (!r.ok) throw new Error('HTTP ' + r.status)
   return r.json()
+}
+
+// ── Host MarkdownText contract ───────────────────────────────────────────
+//
+// `MarkdownText` has NO default for `labels`: in the host's markdown renderer
+// `renderCode()` reads `context.labels.code.copyLabel` unconditionally, so the
+// moment the text carries one non-empty fenced code block (and no labels were
+// passed) the primitive throws `TypeError: Cannot read properties of undefined
+// (reading 'code')` INSIDE ITS OWN RENDER. That throw escapes our component
+// (it happens after `h()` returns, so no try/catch of ours can see it), reaches
+// the slot renderer's error boundary, and a non-chain slot entry is then
+// *abdicated* — the settings section renders an empty div for the rest of the
+// session. Symptom: the page goes blank the first time a skill preview with a
+// code fence loads, and it never comes back. So: every call site must pass the
+// full labels object, shape copied from the host's own `markdownLabels()`.
+
+/** The host primitive, or null when it is absent (plain-Node tests): the
+ *  `prim()` shim is NOT usable here — it always returns a function, so the
+ *  `? MarkdownText : <pre>` fallbacks below would never take the `<pre>` arm. */
+const MarkdownText = P && typeof P.MarkdownText === 'function' ? P.MarkdownText : null
+
+/** Localized chrome the host markdown renderer reads off `labels`. */
+function markdownLabels(t) {
+  return {
+    code: {
+      copyLabel: t('codeCopy'),
+      copiedLabel: t('codeCopied'),
+      toolbarLabels: {
+        codeLabel: t('codeLabel'),
+        wrapLabel: t('codeWrap'),
+        unwrapLabel: t('codeUnwrap'),
+      },
+    },
+    footnotes: t('footnotes'),
+  }
 }
 
 // ── Small building blocks ────────────────────────────────────────────────
@@ -560,6 +607,9 @@ function DetailModal({ sel, executors, t, onClose, onInstalled, onDeleted }) {
 
   const files = data?.files || []
   const isMd = file ? file.path.endsWith('.md') : true
+  // Stable identity per locale revision: MarkdownText memoizes on `labels`,
+  // and a new object every render would re-parse the whole document.
+  const mdLabels = useMemo(() => markdownLabels(t), [t])
 
   return h('div', null,
     h(SkDialog, { title: shortName(sel.name), onClose, wide: true },
@@ -589,12 +639,12 @@ function DetailModal({ sel, executors, t, onClose, onInstalled, onDeleted }) {
                       h('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, f.path),
                       h('span', { className: 'sk-dir' }, formatSize(f.size))))),
                   h('div', { className: 'sk-preview sk-md' },
-                    isMd && prim('MarkdownText')
-                      ? h(P.MarkdownText, { text: file ? fileText : (data?.content || '') })
+                    isMd && MarkdownText
+                      ? h(MarkdownText, { text: file ? fileText : (data?.content || ''), labels: mdLabels })
                       : h('pre', { style: { whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'var(--dsw-font-family)' } }, file ? fileText : (data?.content || ''))))
               : h('div', { className: 'sk-preview sk-md' },
-                  prim('MarkdownText')
-                    ? h(P.MarkdownText, { text: data?.content || '' })
+                  MarkdownText
+                    ? h(MarkdownText, { text: data?.content || '', labels: mdLabels })
                     : h('pre', { style: { whiteSpace: 'pre-wrap', margin: 0 } }, data?.content || '')))),
     confirming && h(SkDialog, {
       title: t('deleteTitle'),
@@ -1163,7 +1213,7 @@ const CLIENT_NAME = 'dexter-skills-mcp-manager'
 module.exports = {
   name: CLIENT_NAME,
   inject: ['slots', 'locale'],
-  __internals: { NS, ZH, EN, matchSkill, formatSize, formatTime },
+  __internals: { NS, ZH, EN, matchSkill, formatSize, formatTime, markdownLabels },
   /** Test/host helper: mount a standalone page into any container. */
   __boot(container, opts = {}) {
     ensureStyles()
