@@ -1292,7 +1292,8 @@ function draftFromRow(row, id) {
     serverName: row.serverName || '',
     transport: row.transport === 'streamable-http' ? 'streamable-http' : 'stdio',
     command: row.command || '',
-    argsText: splitLines(row.args).join('\n'),
+    // 一条参数一行。`row.args` 已经是数组：直接 String() 会得到逗号拼接的一行。
+    argsText: Array.isArray(row.args) ? row.args.join('\n') : splitLines(row.args).join('\n'),
     envText: mapText(row.env),
     cwd: row.cwd || '',
     url: row.url || '',

@@ -54,7 +54,7 @@ try {
   Module._resolveFilename = originalResolve
 }
 
-const { EN, ZH, McpView, McpPane, McpServerCard, McpEditorDialog, McpFilesDialog, McpHelpDialog, SkillsHelpDialog, CardsView, ExecutorList } = client.__internals
+const { EN, ZH, McpView, McpPane, McpServerCard, McpEditorDialog, McpFilesDialog, McpHelpDialog, SkillsHelpDialog, CardsView, ExecutorList, draftFromRow, serverFromDraft } = client.__internals
 
 /** The host's own `t()` shape: EN copy with `{name}` interpolation. */
 const t = (key, vars) => {
@@ -356,6 +356,14 @@ test('an executor row is one compact line: the path is text until asked for', ()
   assert.ok(!values.includes('~/.codex/skills'), 'a collapsed row mounts no text input for its path')
   assert.ok(values.includes('~/.my-cli/skills'), 'the editing row does')
   assert.ok(String(text).includes(EN.execEnabledLabel), 'the enable checkbox label is on the row')
+})
+
+test('the editor shows one argument per line, not a comma-joined blob', () => {
+  // `row.args` is already an array: turning it into text with String()/splitLines
+  // produced "a,b,c" on a single line, which then round-tripped into one argument.
+  const draft = draftFromRow({ serverName: 'x', transport: 'stdio', args: ['-y', 'pkg', '--flag'] }, 'm1')
+  assert.equal(draft.argsText, '-y\npkg\n--flag')
+  assert.deepEqual(serverFromDraft(draft).args, ['-y', 'pkg', '--flag'])
 })
 
 test('the pane itself renders its loading state without throwing', () => {
