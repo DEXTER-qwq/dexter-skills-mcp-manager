@@ -1,12 +1,14 @@
 // 手写 MCP 配置模板
 //
-// 复制到  ~/.dsh/skills-management/mcp.local.jsonc  即可生效（改完重启 dsh）。
+// 复制到  ~/.dsh/skills-management/mcp.local.jsonc  即可生效。
 //
-// 这个文件**只被读取，从不被改写**，所以：
-//   - 注释安全：// 行注释 与 /* 块注释 */  都可以用
-//   - 尾随逗号安全：数组/对象最后一项后面留个逗号也没问题
-//   - 「MCP 管理」页面里的开关不会动到这个文件（它只写本插件自己的 mcp.json）
+// 这个文件是「MCP 管理」页面的唯一数据来源：
+//   - 在页面上点某条 server 的卡片就会**就地**改写它：只重写你改动的那一条，
+//     其它行（注释、空行、尾随逗号、你原来的排版）保持原样；
+//   - 每次保存前会把旧版本留成 mcp.local.jsonc.bak；
+//   - 页面上的开关只写本插件自己的 mcp.json，不会动这个文件。
 //
+// JSONC：// 行注释、/* 块注释 */、尾随逗号都安全。
 // 顶层的写法：数组，或 {"servers": [...]}（下面用的是后者）；另外可以加一个
 // 顶层 "disabled": ["名字"] 来停用某些条目，效果和条目里写 "enabled": false 一样。
 //
@@ -14,8 +16,8 @@
 //   1. 条目里写 "enabled": false  —— 页面可以把这个覆盖回「开」（记在 mcp.json，不动本文件）
 //   2. 把条目整块注释掉
 //   3. 顶层 "disabled": ["my-stdio-server"]
-// 反过来，如果条目是开着的（没写 enabled / 写了 true），页面上就没有开关：
-// 想关它只能回到这个文件改。
+// 反过来，如果条目是开着的（没写 enabled / 写了 true），页面上的开关就没有意义：
+// 要关它就在页面上点这条卡片、取消勾选「启用」。
 {
   "servers": [
     // 方式一：本机启动一个程序（stdio）
@@ -44,7 +46,18 @@
       "toolCallTimeoutMs": 30000
     },
 
-    // 方式三：留着但先不开 —— 页面上的开关能把它打开（只写 mcp.json，不动这里）
+    // 方式三：server 自己还会读一个配置文件（页面「配置文件」面板里可编辑）
+    // 页面能从 args 里的绝对路径自动认出这种文件，下面的 relatedFiles 只是给
+    // 认不出的情况补一条；保存这个文件后，读它的 server 会自动重启。
+    {
+      "serverName": "my-ssh-server",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@fangjunjie/ssh-mcp-server", "--config-file", "~/.dsh/skills-management/ssh-config.json"],
+      "relatedFiles": ["~/.dsh/skills-management/ssh-config.json"]
+    },
+
+    // 方式四：留着但先不开 —— 页面上的开关能把它打开（只写 mcp.json，不动这里）
     {
       "serverName": "parked-server",
       "transport": "stdio",

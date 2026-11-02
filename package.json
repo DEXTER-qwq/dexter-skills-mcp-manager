@@ -2,7 +2,7 @@
   "name": "dexter-skills-mcp-manager",
   "version": "0.8.1-local",
   "private": true,
-  "description": "dsh 插件 · 技能管理 + MCP 管理（本地版）：skill管理页面管理本机skills, 支持导入十余个 coding agent 的技能目录（Claude Code、ZCode、Codex、WorkBuddy 等），可预览、收编进 DSH 用户库供 skill 工具调用；mcp管理页面, 列出 loader 与手写配置 mcp.local.jsonc 里的 MCP server，可按需求开关。",
+  "description": "dsh 插件 · 技能管理 + MCP 管理（本地版）：skill管理页面管理本机skills, 支持导入十余个 coding agent 的技能目录（Claude Code、ZCode、Codex、WorkBuddy 等），可预览、收编进 DSH 用户库供 skill 工具调用；mcp管理页面列出 loader 与手写配置 mcp.local.jsonc 里的 MCP server，可直接增删改条目（就地重写、留 .bak）、重载进程，并编辑 server 自己读的配置文件（如 ssh-config.json）。",
   "license": "MIT",
   "keywords": [
     "dsh",
@@ -38,7 +38,7 @@
     "cordis.patch.yml"
   ],
   "scripts": {
-    "check": "node --check src/index.js && node --check src/mcp-manager.js && node --check client/index.js",
+    "check": "node --check src/index.js && node --check src/mcp-manager.js && node --check src/mcp-files.js && node --check client/index.js",
     "test": "node --test test/*.test.mjs",
     "build:client": "node scripts/build-client.mjs"
   },

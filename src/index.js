@@ -30,6 +30,9 @@ const { homedir } = require('node:os')
 // 只有本插件自己的状态文件（$DSH_HOME/skills-management/mcp.json）会被写。
 // 见 src/mcp-manager.js 顶部说明。
 const mcpManager = require('./mcp-manager.js')
+// MCP 配置文件编辑器：只允许 $DSH_HOME/skills-management 下的文本文件，写前校验 + .bak + 原子写。
+// 用途是 ssh-mcp-server 这类「server 自己还会读一个配置文件」的场景（ssh-config.json）。
+const mcpFiles = require('./mcp-files.js')
 // settings 服务要求 schemastery schema（可调用 + toJSON；zod 不兼容，register 会抛错被吞）。
 // 宿主沙箱内解析打包依赖可能抛 ERR_INTERNAL_ASSERTION（.pnpm 软链），因此优先沿
 // dsh 全局安装取 settings 服务自用的那份副本，本地开发/测试再退回标准 require。
@@ -607,9 +610,9 @@ function contentTypeFor(p) {
 // ── MCP 管理错误 → HTTP 状态码 ──────────────────────────────────────────
 function mcpErrorStatus(error) {
   const message = String((error && error.message) || error)
-  if (/not found|not managed|is not known/i.test(message)) return 404
-  if (/already (exists|managed|configured)|cannot be removed|unavailable/i.test(message)) return 409
-  if (/is required|must be|must match|is not a valid URL|only a process\.env/i.test(message)) return 400
+  if (/not found|not managed|is not known|does not exist yet|is not a regular file/i.test(message)) return 404
+  if (/already (exists|managed|configured|declared)|cannot be removed|unavailable|cannot be restarted|is parked|is mounted by another/i.test(message)) return 409
+  if (/is required|must be|must match|is not a valid URL|only a process\.env|outside|binary file|looks like a binary|must be strict JSON|cannot be parsed|cannot be read|editor stops at|declared twice|body must provide|would not parse/i.test(message)) return 400
   return 500
 }
 
@@ -632,7 +635,7 @@ module.exports = {
     const serviceOf = (name) => {
       try { return typeof ctx.get === 'function' ? ctx.get(name) : ctx[name] } catch { return undefined }
     }
-    /** serverName -> loader entry id：本插件动态挂载的 server。 */
+    /** serverName -> `{ entryId, fingerprint }`：本插件动态挂载的 server。 */
     const mountedMcp = new Map()
     let mcpWriteChain = Promise.resolve()
 
@@ -654,8 +657,23 @@ module.exports = {
      */
     const ownerOfServer = (serverName) => mcpManager.mountedBy(serviceOf('loader'), serverName)
 
-    async function mountMcpServer(server) {
-      if (mountedMcp.has(server.serverName)) return
+    /**
+     * Mount one server, or remount it when its fingerprint changed.
+     *
+     * The fingerprint covers the client config **and** the stat of every file
+     * that config points at, which is what makes "edit ssh-config.json, press
+     * save" restart the server: an MCP server reads its own config once, at
+     * startup, so only a new process sees a new host list.
+     *
+     * @returns `'created' | 'remounted' | 'unchanged'`
+     */
+    async function mountMcpServer(server, { force = false } = {}) {
+      const fingerprint = mcpManager.serverFingerprint(server)
+      const current = mountedMcp.get(server.serverName)
+      if (current !== undefined) {
+        if (!force && current.fingerprint === fingerprint) return 'unchanged'
+        await unmountMcpServer(server.serverName)
+      }
       const loader = serviceOf('loader')
       if (loader === undefined || typeof loader.create !== 'function') {
         throw new Error('the loader service is unavailable, so an MCP server cannot be mounted')
@@ -669,12 +687,13 @@ module.exports = {
       }
       const entryId = mcpManager.MANAGED_ENTRY_PREFIX + server.serverName
       await loader.create({ id: entryId, name: mcpManager.MCP_PLUGIN_NAME, config: mcpManager.mcpClientConfig(server) })
-      mountedMcp.set(server.serverName, entryId)
+      mountedMcp.set(server.serverName, { entryId, fingerprint })
+      return current === undefined ? 'created' : 'remounted'
     }
 
     async function unmountMcpServer(serverName) {
-      const entryId = mountedMcp.get(serverName)
-      if (entryId === undefined) return
+      const mount = mountedMcp.get(serverName)
+      if (mount === undefined) return
       const loader = serviceOf('loader')
       if (loader === undefined || typeof loader.remove !== 'function') {
         mountedMcp.delete(serverName)
@@ -682,7 +701,7 @@ module.exports = {
       }
       try {
         // 先等移除真的完成再清表：否则并发的挂载会在旧条目还在时又 create 一次
-        await loader.remove(entryId)
+        await loader.remove(mount.entryId)
       } catch (error) {
         ctx.logger.warn(`skills-management: unmount of '${serverName}' failed: ${error && error.message}`)
       }
@@ -692,15 +711,20 @@ module.exports = {
     /**
      * Mount every server the hand-written file says is on (with this page's
      * `forcedOn` overrides) and unmount the ones it no longer wants. Called at
-     * startup and after every switch.
+     * startup, after every switch, and after every edit that reaches the page.
+     *
+     * `force` remounts even an unchanged entry — the "重载" button, for when the
+     * server's own config file moved under its feet in a way the fingerprint
+     * cannot see (an env file it reads, a remote registry, …).
      *
      * Names a composition layer or another plugin already declares are skipped:
      * precedence says that row wins, and `dsh-mcp-client` rejects a duplicate
      * `serverName` anyway.
      */
-    async function syncLocalMcpMounts() {
+    async function syncLocalMcpMounts({ force = false } = {}) {
+      const summary = { created: [], remounted: [], unmounted: [] }
       const loader = serviceOf('loader')
-      if (loader === undefined) return
+      if (loader === undefined) return summary
       const taken = new Set(mcpManager.loaderServers(loader)
         .filter((entry) => entry.owner !== 'self')
         .map((entry) => entry.config.serverName))
@@ -709,13 +733,20 @@ module.exports = {
       const wantedNames = new Set(wanted.map((server) => server.serverName))
       // drop mounts the file no longer wants (edited, parked or deleted by hand)
       for (const serverName of [...mountedMcp.keys()]) {
-        if (!wantedNames.has(serverName)) await unmountMcpServer(serverName)
+        if (wantedNames.has(serverName)) continue
+        await unmountMcpServer(serverName)
+        summary.unmounted.push(serverName)
       }
       for (const server of wanted) {
-        try { await mountMcpServer(server) } catch (error) {
+        try {
+          const action = await mountMcpServer(server, { force })
+          if (action === 'created') summary.created.push(server.serverName)
+          if (action === 'remounted') summary.remounted.push(server.serverName)
+        } catch (error) {
           ctx.logger.warn(`skills-management: mount of '${server.serverName}' failed: ${error && error.message}`)
         }
       }
+      return summary
     }
 
     /**
@@ -735,8 +766,7 @@ module.exports = {
       return mcpStore.get()
     }
 
-    const mcpSnapshot = () => {
-      const toolsService = serviceOf('tools')
+    const mcpSnapshot = () => {      const toolsService = serviceOf('tools')
       const schemas = toolsService !== undefined && typeof toolsService.schemas === 'function' ? toolsService.schemas() : []
       const loader = serviceOf('loader')
       const state = refreshMcpState()
@@ -760,15 +790,31 @@ module.exports = {
       }
     }
 
+    /**
+     * The hand-written config's exact bytes, `''` when it does not exist yet.
+     *
+     * The editor needs the text itself (not the parsed servers): it rewrites
+     * only the entries it changed and must leave every other byte — comments,
+     * blank lines, trailing commas — untouched.
+     */
+    const readLocalText = async (file) => {
+      try {
+        return await fsP.readFile(file, 'utf8')
+      } catch (error) {
+        if (error !== null && typeof error === 'object' && error.code === 'ENOENT') return ''
+        throw error
+      }
+    }
+
     // 启动接线（同步注册，异步动作 fire-and-forget 且自带兜底）
     ctx.effect(() => {
       void syncLocalMcpMounts().catch((error) => {
         ctx.logger.warn(`skills-management: initial MCP mount pass failed: ${error && error.message}`)
       })
       return () => {
-        for (const entryId of mountedMcp.values()) {
+        for (const mount of mountedMcp.values()) {
           const loader = serviceOf('loader')
-          if (loader !== undefined && typeof loader.remove === 'function') void loader.remove(entryId).catch(() => {})
+          if (loader !== undefined && typeof loader.remove === 'function') void loader.remove(mount.entryId).catch(() => {})
         }
         mountedMcp.clear()
       }
@@ -1226,6 +1272,146 @@ module.exports = {
               }
             })
             sendJson(res, 200, mcpSnapshot())
+            return
+          }
+
+          // ── MCP 管理：配置编辑 / 重载 / 关联配置文件 ──────────────────
+          // 保存条目 = 就地重写 mcp.local.jsonc（只重写改动的那一条，先留 .bak），
+          // 随后同步挂载：条目配置变了、或它自己读的配置文件变了，那个 server 就重启。
+
+          // PUT /skills-management/api/mcp/servers → 整表保存手写配置
+          if (req.method === 'PUT' && apiPath === '/skills-management/api/mcp/servers') {
+            const body = await readJsonBody(req)
+            if (!Array.isArray(body.servers)) { sendJson(res, 400, { error: 'body must provide a servers array' }); return }
+            // 全部条目先校验完再落盘：写一半的配置比不写更糟
+            const desired = []
+            const seen = new Set()
+            for (const item of body.servers) {
+              const config = mcpManager.validateServerInput(item)
+              if (seen.has(config.serverName)) throw new Error(`serverName '${config.serverName}' is declared twice`)
+              seen.add(config.serverName)
+              desired.push({ ...config, enabled: item.enabled !== false })
+            }
+            // 一个名字只允许一个来源：组合层/别的插件已经声明过的名字，写进手写
+            // 文件只会被忽略（还会在页面上标成「有同名声明」），所以这里直接拒绝。
+            const taken = new Set(mcpManager.loaderServers(serviceOf('loader'))
+              .filter((entry) => entry.owner !== 'self')
+              .map((entry) => entry.config.serverName))
+            for (const server of desired) {
+              if (!taken.has(server.serverName)) continue
+              const error = new Error(`'${server.serverName}' is already declared by the dsh composition or another plugin, so an entry in the hand-written file would be ignored`)
+              error.status = 409
+              throw error
+            }
+            const local = mcpManager.readLocalConfig()
+            if (local.status === 'corrupt') {
+              throw new Error(`the hand-written config cannot be parsed (${local.error}); fix it before saving from this page`)
+            }
+            // 不能读懂的条目不在页面上，也不在保存的清单里 —— 一旦重写就会被删掉。
+            // 与其静默丢用户的东西，不如让他先把文件修好。
+            if (Array.isArray(local.invalid) && local.invalid.length > 0) {
+              const first = local.invalid[0]
+              throw new Error(`${local.invalid.length} entries in ${mcpManager.localFile()} cannot be read (first: ${first.reason}); fix or delete them before saving from this page`)
+            }
+            const raw = await readLocalText(local.file)
+            let nextText = raw
+            if (raw.trim() === '') {
+              nextText = mcpManager.newLocalConfigText(desired)
+            } else {
+              const rewritten = mcpManager.rewriteLocalConfig(raw, desired)
+              if (!rewritten.ok) throw new Error(rewritten.error)
+              nextText = rewritten.text
+            }
+            let backup
+            if (nextText !== raw) {
+              const written = await mcpFiles.writeConfigFile(local.file, nextText)
+              backup = written.backup
+            }
+            const summary = await withMcpLock(async () => {
+              const state = refreshMcpState()
+              // `forcedOn` is only meaningful for an entry the file parks. Saving
+              // an entry as enabled (or parking it again by hand) must not leave
+              // a stale override behind that would switch it on unexpectedly.
+              const parked = new Set(desired.filter((server) => server.enabled === false).map((server) => server.serverName))
+              const kept = forcedOnServerNames().filter((name) => parked.has(name))
+              if (kept.length !== forcedOnServerNames().length) {
+                await mcpStore.replace({ ...state, forcedOn: kept })
+              }
+              // 配置变了的条目指纹也变了，sync 会把它重挂起来（即重启进程）
+              return syncLocalMcpMounts()
+            })
+            sendJson(res, 200, { ...mcpSnapshot(), saved: { changed: nextText !== raw, backup }, sync: summary })
+            return
+          }
+
+          // POST /skills-management/api/mcp/reload → 重启一个（或全部）本页挂载的 server
+          // 这是「新增 ssh 连接后不用停用/再启用」的那一步：进程重建后才会重新读
+          // 自己的配置文件。
+          if (req.method === 'POST' && apiPath === '/skills-management/api/mcp/reload') {
+            const body = await readJsonBody(req)
+            const name = typeof body.serverName === 'string' && body.serverName !== '' ? body.serverName : undefined
+            const summary = await withMcpLock(async () => {
+              if (name === undefined) return syncLocalMcpMounts({ force: true })
+              const row = mcpSnapshot().servers.find((server) => server.serverName === name)
+              if (row === undefined) {
+                const error = new Error(`MCP server '${name}' is not known`)
+                error.status = 404
+                throw error
+              }
+              if (row.source !== 'local') {
+                const error = new Error(row.source === 'foreign'
+                  ? `'${name}' is mounted by another plugin — restart it there`
+                  : `'${name}' comes from the dsh composition — it cannot be restarted from this page`)
+                error.status = 409
+                throw error
+              }
+              // 先把文件里的改动同步进来，再强制重启这一条
+              await syncLocalMcpMounts()
+              const wanted = mcpManager.mountableServers(mcpStore.get(), mcpManager.readLocalConfig())
+                .find((server) => server.serverName === name)
+              if (wanted === undefined) {
+                const error = new Error(`'${name}' is parked with "enabled": false in ${mcpManager.localFile()}; switch it on first`)
+                error.status = 409
+                throw error
+              }
+              const action = await mountMcpServer(wanted, { force: true })
+              return { created: action === 'created' ? [name] : [], remounted: action === 'created' ? [] : [name], unmounted: [] }
+            })
+            sendJson(res, 200, { ...mcpSnapshot(), sync: summary })
+            return
+          }
+
+          // GET /skills-management/api/mcp/files → 本插件目录下可编辑的配置文件
+          if (req.method === 'GET' && apiPath === '/skills-management/api/mcp/files') {
+            sendJson(res, 200, {
+              dir: mcpManager.displayPath(mcpManager.stateDir()),
+              files: mcpFiles.configFileList(),
+            })
+            return
+          }
+
+          // GET /skills-management/api/mcp/file?path=… → 一个文件的内容
+          if (req.method === 'GET' && apiPath === '/skills-management/api/mcp/file') {
+            sendJson(res, 200, { file: mcpFiles.readConfigFile(query.get('path') || '') })
+            return
+          }
+
+          // PUT /skills-management/api/mcp/file → 保存一个配置文件
+          // 写前校验（.json 必须严格 JSON）、留 .bak、原子写；写完同步挂载，
+          // 于是「改了 ssh-config.json」会自动重启读它的 server。
+          if (req.method === 'PUT' && apiPath === '/skills-management/api/mcp/file') {
+            const body = await readJsonBody(req)
+            if (typeof body.text !== 'string') { sendJson(res, 400, { error: 'body must provide text' }); return }
+            const written = await mcpFiles.writeConfigFile(body.path, body.text)
+            const summary = await withMcpLock(() => syncLocalMcpMounts())
+            // read back what is really on disk: the editor replaces its buffer
+            // with this, so it must carry the text (describeFile does not).
+            sendJson(res, 200, {
+              ...mcpSnapshot(),
+              file: mcpFiles.readConfigFile(body.path),
+              backup: written.backup,
+              sync: summary,
+            })
             return
           }
 

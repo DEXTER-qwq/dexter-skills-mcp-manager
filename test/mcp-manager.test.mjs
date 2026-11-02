@@ -310,10 +310,11 @@ test('the shipped example template parses, and demonstrates all three parked sty
     const local = mcpManager.readLocalConfig()
     assert.equal(local.status, 'ok')
     assert.equal(local.hadComments, true, 'the template is JSONC, and comments must not break it')
-    assert.deepEqual(local.servers.map((s) => s.serverName), ['my-stdio-server', 'my-http-server', 'parked-server'])
-    assert.deepEqual(local.servers.map((s) => s.enabled), [true, true, false], 'the parked example is the switchable one')
+    assert.deepEqual(local.servers.map((s) => s.serverName),
+      ['my-stdio-server', 'my-http-server', 'my-ssh-server', 'parked-server'])
+    assert.deepEqual(local.servers.map((s) => s.enabled), [true, true, true, false], 'the parked example is the switchable one')
     assert.deepEqual(mcpManager.mountableServers({ forcedOn: [] }, local).map((s) => s.serverName),
-      ['my-stdio-server', 'my-http-server'])
+      ['my-stdio-server', 'my-http-server', 'my-ssh-server'])
   })
 })
 

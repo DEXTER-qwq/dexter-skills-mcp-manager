@@ -120,25 +120,29 @@ test('every MarkdownText call site passes labels', () => {
 // ── MCP pane copy ───────────────────────────────────────────────────────
 
 test('the MCP pane keeps no copy for the features that were removed', () => {
-  // The pane is read-only apart from forcing a parked entry on: adding, editing,
-  // deleting, importing and pruning are gone from the host surface, so no copy
-  // may survive to promise them.
+  // The pane edits the hand-written file and its related config files; the
+  // remote-era surfaces (import from the loader, prune, the old server dialog)
+  // are still gone, so no copy may survive to promise them.
   const removed = [
-    'mcpAdd', 'mcpAddTitle', 'mcpAddHint', 'mcpEdit', 'mcpEditTitle',
-    'mcpDelete', 'mcpDeleteTitle', 'mcpDeleteConfirm', 'mcpDeleted', 'mcpCreated',
     'mcpImport', 'mcpImportTitle', 'mcpImportHint', 'mcpImportNone', 'mcpImportDo',
     'mcpImportDone', 'mcpImportSkipped', 'mcpImportOnlyTaken', 'mcpImportReasonNotInstalled',
     'mcpImportReasonAlreadyManaged', 'mcpImportReasonNameTaken', 'mcpImportReasonInvalid',
     'mcpPrune', 'mcpPruneDone', 'mcpDuplicateNotice', 'mcpStateRepaired', 'mcpSourceUser',
-    'mcpServerName', 'mcpServerNameHint', 'mcpTransport', 'mcpStdio', 'mcpHttp',
-    'mcpCommand', 'mcpCommandHint', 'mcpArgs', 'mcpArgsHint', 'mcpEnv', 'mcpEnvHint',
-    'mcpHeaders', 'mcpCwd', 'mcpUrl', 'mcpTimeout', 'mcpTimeoutHint', 'mcpSave', 'mcpCancel',
+    'mcpAdd', 'mcpAddTitle', 'mcpAddHint', 'mcpEditTitle', 'mcpDeleteTitle', 'mcpDeleteConfirm',
+    'mcpDeleted', 'mcpCreated', 'mcpCancel', 'mcpSave', 'mcpServerName', 'mcpServerNameHint',
+    'mcpTransport', 'mcpStdio', 'mcpHttp', 'mcpCommand', 'mcpCommandHint', 'mcpArgs', 'mcpArgsHint',
+    'mcpEnv', 'mcpEnvHint', 'mcpHeaders', 'mcpCwd', 'mcpUrl', 'mcpTimeout', 'mcpTimeoutHint',
   ]
   const stale = removed.filter((key) => ZH[key] !== undefined || EN[key] !== undefined)
   assert.deepEqual(stale, [], `stale MCP locale keys: ${stale.join(', ')}`)
   const src = readFileSync(new URL('../client/index.js', import.meta.url), 'utf8')
   for (const bannedRef of ['mcp/import', 'mcp/prune', 'McpServerDialog', 'McpImportDialog']) {
     assert.ok(!src.includes(bannedRef), `client source must not reference ${bannedRef}`)
+  }
+  // …and the editing surface it was replaced with is present in both locales
+  for (const key of ['mcpEditConfig', 'mcpConfigFiles', 'mcpReload', 'mcpNewServer', 'mcpFormName', 'mcpFormRelated']) {
+    assert.equal(typeof ZH[key], 'string', `zh.${key}`)
+    assert.equal(typeof EN[key], 'string', `en.${key}`)
   }
 })
 

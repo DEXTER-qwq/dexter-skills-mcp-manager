@@ -31,8 +31,8 @@
  */
 
 const fsP = require('node:fs/promises')
-const { readFileSync } = require('node:fs')
-const { join, resolve } = require('node:path')
+const { readFileSync, statSync } = require('node:fs')
+const { join, resolve, sep } = require('node:path')
 const { homedir } = require('node:os')
 
 /** Loader entry name of the official MCP bridge plugin. */
@@ -420,6 +420,46 @@ function normalizeStringMap(raw, label) {
   return out
 }
 
+/** At most this many extra config files may be attached to one server. */
+const RELATED_FILES_LIMIT = 16
+
+/**
+ * What the page shows as a "config file": the extensions a human would open and
+ * edit. A detected path that is an executable or a tool's own script still
+ * counts for the fingerprint (editing it should restart the server) but is not
+ * listed as a config — `python.exe` beside `jadx_mcp_server.py` is noise, not a
+ * configuration.
+ */
+const CONFIG_FILE_RE = /\.(jsonc?|ya?ml|toml|ini|conf|cfg|env|properties|txt)$/i
+const looksLikeConfigFile = (file) => CONFIG_FILE_RE.test(String(file))
+
+/**
+ * `relatedFiles`: files the server *itself* reads at startup (ssh-mcp-server and
+ * its `--config-file`), as opposed to the entry that starts it.
+ *
+ * They are stored in this plugin's own entry format and are **not** part of the
+ * `dsh-mcp-client` config (which is strict), so {@link mcpClientConfig} strips
+ * them. Two jobs: the pane shows them next to the server and opens them in its
+ * file editor, and their stat joins the mount fingerprint — so editing such a
+ * file and pressing save restarts exactly the servers that read it.
+ */
+function normalizeRelatedFiles(raw) {
+  if (raw === undefined || raw === null) return []
+  const list = Array.isArray(raw) ? raw : [raw]
+  const out = []
+  for (const item of list) {
+    if (typeof item !== 'string') throw new Error('relatedFiles must be an array of file paths')
+    const value = item.trim()
+    if (value === '') continue
+    if (value.includes('\0')) throw new Error('relatedFiles: a path may not contain a NUL byte')
+    if (!out.includes(value)) out.push(value)
+  }
+  if (out.length > RELATED_FILES_LIMIT) {
+    throw new Error(`relatedFiles accepts at most ${RELATED_FILES_LIMIT} paths`)
+  }
+  return out
+}
+
 /**
  * Validate one submitted server into the exact `dsh-mcp-client` config shape.
  * Throws with a user-facing message; never guesses.
@@ -452,6 +492,8 @@ function validateServerInput(input) {
     if (!Number.isInteger(value) || value <= 0) throw new Error('toolCallTimeoutMs must be a positive integer (ms)')
     server.toolCallTimeoutMs = value
   }
+  const relatedFiles = normalizeRelatedFiles(input.relatedFiles)
+  if (relatedFiles.length > 0) server.relatedFiles = relatedFiles
   return server
 }
 
@@ -507,6 +549,489 @@ function reviveJsValues(map) {
     if (typeof value === 'string') out[key] = value
   }
   return out
+}
+
+// ── related config files & mount fingerprint ────────────────────────────
+
+/** Absolute path on this platform: `C:\…`, `\\server\share\…` or `/…`. */
+function isAbsoluteFilePath(value) {
+  return typeof value === 'string' && (/^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]/.test(value) || (value.startsWith('/') && !value.startsWith('//')))
+}
+
+/** Strip the quotes a hand-written arg may carry: `"C:\a b\x.json"`. */
+function unquoteArg(value) {
+  const text = String(value).trim()
+  if (text.length >= 2 && ((text[0] === '"' && text.endsWith('"')) || (text[0] === "'" && text.endsWith("'")))) {
+    return text.slice(1, -1)
+  }
+  return text
+}
+
+/** `~/x` / `~\x` → an absolute path under the home directory. */
+function expandTildePath(value) {
+  const text = unquoteArg(value)
+  if (text === '~') return homedir()
+  if (text.startsWith('~/') || text.startsWith('~\\')) return join(homedir(), text.slice(2))
+  return text
+}
+
+function statFile(file) {
+  try {
+    const stat = statSync(file)
+    return stat.isFile() ? stat : undefined
+  } catch { return undefined }
+}
+
+/** `~`-folded absolute path, for display only. */
+function displayPath(p) {
+  const home = homedir()
+  if (typeof p !== 'string' || p === '') return ''
+  if (p === home) return '~'
+  if (p.startsWith(home + sep)) return '~' + p.slice(home.length)
+  return p
+}
+
+/** True when `file` sits directly inside this plugin's own state directory. */
+function isInsideStateDir(file) {
+  const dir = resolve(stateDir())
+  if (typeof file !== 'string' || file === '') return false
+  if (process.platform === 'win32') return file.toLowerCase().startsWith(dir.toLowerCase() + sep)
+  return file.startsWith(dir + sep)
+}
+
+/**
+ * The config files a server reads itself.
+ *
+ * Two sources, because neither alone is enough:
+ * - **declared** — `relatedFiles` in the entry, written through the pane;
+ * - **detected** — an absolute path among `command`/`args` that names an
+ *   existing file. `npx -y pkg --config-file C:\…\ssh-config.json` is exactly
+ *   this shape, so the ssh case needs no extra configuration.
+ *
+ * Detection is deliberately conservative: only absolute paths, only existing
+ * files, never a bare package spec or a flag (`-y`, `@scope/pkg`).
+ */
+function relatedFilesOf(server) {
+  const config = isPlainObject(server) ? server : {}
+  const out = []
+  const seen = new Set()
+  const push = (rawPath, origin) => {
+    const file = expandTildePath(rawPath)
+    if (!isAbsoluteFilePath(file)) return
+    const key = process.platform === 'win32' ? file.toLowerCase() : file
+    if (seen.has(key)) return
+    const stat = statFile(file)
+    // A detected path only counts when it exists (it came from the command line,
+    // which may just as well be an option). A declared one is shown anyway, so a
+    // file that has to be created yet can still be opened and written.
+    if (stat === undefined && origin !== 'declared') return
+    seen.add(key)
+    out.push({
+      path: file,
+      display: displayPath(file),
+      origin,
+      exists: stat !== undefined,
+      size: stat === undefined ? 0 : stat.size,
+      modifiedAt: stat === undefined ? undefined : stat.mtime.toISOString(),
+      mtimeMs: stat === undefined ? 0 : stat.mtimeMs,
+      // only files this plugin owns may be opened in the page's editor
+      editable: isInsideStateDir(file),
+      // declared files are always listed; a detected one only when it looks like
+      // something a human configures (the rest still feed the fingerprint)
+      shown: origin === 'declared' || looksLikeConfigFile(file),
+    })
+  }
+  for (const declared of normalizeRelatedFiles(config.relatedFiles)) push(declared, 'declared')
+  if (config.transport === 'stdio') {
+    for (const candidate of [config.command, ...(Array.isArray(config.args) ? config.args : [])]) push(candidate, 'detected')
+  }
+  return out
+}
+
+/**
+ * What a mount was built from: the client config plus the stat of every file
+ * that config points at.
+ *
+ * `syncLocalMcpMounts` remounts a server whose fingerprint changed, which is
+ * what makes "edit the entry / edit ssh-config.json, press save" restart the
+ * process — the MCP client reads its own config once, at startup.
+ */
+function serverFingerprint(server) {
+  const files = relatedFilesOf(server).map((file) => [file.path, file.size, file.mtimeMs])
+  return JSON.stringify({ config: mcpClientConfig(server), files })
+}
+
+// ── rewriting the hand-written file in place ────────────────────────────
+
+/**
+ * JSONC tokenizer: punctuation, strings, and bare literals with byte offsets,
+ * comments skipped. It is the basis of the in-place editor: the pane rewrites
+ * **only the entries it actually changed**, so every other line — comments,
+ * blank lines, the author's own alignment, trailing commas — stays exactly as
+ * written.
+ */
+function scanJsoncTokens(text) {
+  const tokens = []
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (/\s/.test(ch)) { i += 1; continue }
+    if (ch === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i += 1
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2)
+      if (end === -1) return { ok: false, error: 'unterminated /* comment' }
+      i = end + 2
+      continue
+    }
+    if (ch === '"') {
+      const start = i
+      i += 1
+      while (i < text.length) {
+        if (text[i] === '\\') { i += 2; continue }
+        if (text[i] === '"') { i += 1; break }
+        i += 1
+      }
+      if (text[i - 1] !== '"' || i - 1 === start) return { ok: false, error: `unterminated string at ${start}` }
+      tokens.push({ type: 'string', start, end: i, raw: text.slice(start, i) })
+      continue
+    }
+    if ('{}[]:,'.includes(ch)) {
+      tokens.push({ type: 'punct', value: ch, start: i, end: i + 1 })
+      i += 1
+      continue
+    }
+    const start = i
+    while (i < text.length && !/[\s,\]}:]/.test(text[i])) i += 1
+    if (i === start) return { ok: false, error: `unexpected character ${JSON.stringify(ch)} at ${start}` }
+    tokens.push({ type: 'literal', start, end: i, raw: text.slice(start, i) })
+  }
+  return { ok: true, tokens }
+}
+
+/** String value of a token, or undefined when it is not a string. */
+function tokenStringValue(token) {
+  if (token === undefined || token.type !== 'string') return undefined
+  try { return JSON.parse(token.raw) } catch { return undefined }
+}
+
+/**
+ * Structural parse: enough of the document to know where every value sits.
+ *
+ * `{ ok: true, root, tokens }` where a node is
+ * `{ type: 'object'|'array'|'scalar', start, end, props?, items? }`.
+ */
+function parseJsoncTree(text) {
+  const scanned = scanJsoncTokens(String(text))
+  if (!scanned.ok) return scanned
+  const tokens = scanned.tokens
+  let index = 0
+  const fail = (message) => ({ ok: false, error: message })
+
+  function node() {
+    const token = tokens[index]
+    if (token === undefined) return fail('unexpected end of document')
+    if (token.type === 'string' || token.type === 'literal') {
+      index += 1
+      return { ok: true, node: { type: 'scalar', start: token.start, end: token.end, token } }
+    }
+    if (token.type !== 'punct') return fail(`unexpected token at ${token.start}`)
+    if (token.value === '{') return objectNode()
+    if (token.value === '[') return arrayNode()
+    return fail(`unexpected ${JSON.stringify(token.value)} at ${token.start}`)
+  }
+
+  function objectNode() {
+    const start = tokens[index].start
+    index += 1
+    const props = []
+    for (;;) {
+      const token = tokens[index]
+      if (token === undefined) return fail('unterminated object')
+      if (token.type === 'punct' && token.value === '}') { index += 1; return { ok: true, node: { type: 'object', start, end: token.end, props } } }
+      if (token.type !== 'string') return fail(`expected a key at ${token.start}`)
+      const key = tokenStringValue(token)
+      index += 1
+      const colon = tokens[index]
+      if (colon === undefined || colon.type !== 'punct' || colon.value !== ':') return fail(`expected ':' at ${token.end}`)
+      index += 1
+      const value = node()
+      if (!value.ok) return value
+      props.push({ key, keyToken: token, value: value.node })
+      const separator = tokens[index]
+      if (separator === undefined) return fail('unterminated object')
+      if (separator.type === 'punct' && separator.value === ',') { index += 1; continue }
+      if (separator.type === 'punct' && separator.value === '}') { index += 1; return { ok: true, node: { type: 'object', start, end: separator.end, props } } }
+      return fail(`expected ',' or '}' at ${separator.start}`)
+    }
+  }
+
+  function arrayNode() {
+    const start = tokens[index].start
+    index += 1
+    const items = []
+    for (;;) {
+      const token = tokens[index]
+      if (token === undefined) return fail('unterminated array')
+      if (token.type === 'punct' && token.value === ']') { index += 1; return { ok: true, node: { type: 'array', start, end: token.end, items } } }
+      const value = node()
+      if (!value.ok) return value
+      items.push(value.node)
+      const separator = tokens[index]
+      if (separator === undefined) return fail('unterminated array')
+      if (separator.type === 'punct' && separator.value === ',') { index += 1; continue }
+      if (separator.type === 'punct' && separator.value === ']') { index += 1; return { ok: true, node: { type: 'array', start, end: separator.end, items } } }
+      return fail(`expected ',' or ']' at ${separator.start}`)
+    }
+  }
+
+  const parsed = node()
+  if (!parsed.ok) return parsed
+  if (index < tokens.length) return fail(`trailing content at ${tokens[index].start}`)
+  return { ok: true, root: parsed.node, tokens }
+}
+
+/** The `servers` array of a document (bare array, or `{ servers: [...] }`). */
+function locateServersArray(root) {
+  if (root === undefined) return undefined
+  if (root.type === 'array') return { array: root, disabled: undefined }
+  if (root.type !== 'object') return undefined
+  const servers = root.props.find((prop) => prop.key === 'servers' && prop.value.type === 'array')
+  if (servers === undefined) return undefined
+  const disabled = root.props.find((prop) => prop.key === 'disabled' && prop.value.type === 'array')
+  return { array: servers.value, disabled: disabled === undefined ? undefined : disabled.value }
+}
+
+/** Key-sorted JSON, so two equal configs compare equal whatever the key order. */
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']'
+  const keys = Object.keys(value).filter((key) => value[key] !== undefined).sort()
+  return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key])).join(',') + '}'
+}
+
+/** Field order of one written entry — the order a human would write it in. */
+const ENTRY_KEY_ORDER = ['serverName', 'transport', 'command', 'args', 'env', 'cwd', 'url', 'headers', 'toolCallTimeoutMs', 'relatedFiles', 'enabled']
+
+/**
+ * One stored server → the object written to `mcp.local.jsonc`.
+ *
+ * `enabled: true` is omitted (it is the default); `enabled: false` is written
+ * explicitly, which is what the pane's switch can then force back on.
+ */
+function storedEntry(config, enabled = true) {
+  const out = {}
+  for (const key of ENTRY_KEY_ORDER) {
+    if (key === 'enabled') {
+      if (enabled === false) out.enabled = false
+      continue
+    }
+    if (config[key] !== undefined) out[key] = config[key]
+  }
+  return out
+}
+
+/** Pretty entry text; `indent` is the leading whitespace of the entry's line. */
+function prettyEntry(entry, indent) {
+  return JSON.stringify(entry, null, 2).split('\n')
+    .map((line, index) => (index === 0 ? line : indent + line))
+    .join('\n')
+}
+
+/** Leading whitespace of the line containing `offset`. */
+function lineIndentAt(text, offset) {
+  const lineStart = text.lastIndexOf('\n', offset - 1) + 1
+  const match = /^[ \t]*/.exec(text.slice(lineStart))
+  return match === null ? '' : match[0]
+}
+
+/** Apply `{ start, end, text }` replacements, last one first so offsets hold. */
+function applyTextEdits(text, edits) {
+  const ordered = [...edits].sort((a, b) => b.start - a.start || b.end - a.end)
+  let out = text
+  let boundary = out.length
+  for (const edit of ordered) {
+    if (edit.end > boundary) continue // overlapping edit: skip rather than corrupt
+    out = out.slice(0, edit.start) + edit.text + out.slice(edit.end)
+    boundary = edit.start
+  }
+  return out
+}
+
+/**
+ * Spans of the elements to delete, each widened to swallow one neighbouring
+ * comma.
+ *
+ * A comma belongs to the pair it separates, so deleting a single item has to
+ * take one, but adjacent deletions must not take the same one twice — that is
+ * what merges the spans below. The search is bounded by the owning array: a
+ * comma in a *sibling* container must never be borrowed (that turned the
+ * document into `],` soup once already).
+ */
+function deleteSpans(tokens, array, items, drop) {
+  const spans = []
+  for (let index = 0; index < items.length; index += 1) {
+    if (!drop(index)) continue
+    const item = items[index]
+    const after = tokens.find((token) => token.type === 'punct' && token.value === ','
+      && token.start >= item.end && token.end <= array.end)
+    if (after !== undefined) {
+      spans.push({ start: item.start, end: after.end })
+      continue
+    }
+    const before = [...tokens].reverse().find((token) => token.type === 'punct' && token.value === ','
+      && token.end <= item.start && token.start >= array.start)
+    spans.push(before === undefined ? { start: item.start, end: item.end } : { start: before.start, end: item.end })
+  }
+  spans.sort((a, b) => a.start - b.start)
+  const merged = []
+  for (const span of spans) {
+    const last = merged[merged.length - 1]
+    if (last !== undefined && span.start <= last.end) last.end = Math.max(last.end, span.end)
+    else merged.push({ start: span.start, end: span.end })
+  }
+  return merged
+}
+
+/**
+ * Rewrite `mcp.local.jsonc` from the pane's desired server list.
+ *
+ * Only what actually differs is touched:
+ * - an entry whose stored config equals the desired one keeps its exact text;
+ * - a changed entry has its own `{ … }` span replaced (its comments go with it —
+ *   the one thing in-place editing cannot keep, and the pane says so);
+ * - a missing entry is deleted together with its separator;
+ * - a new entry is appended after the last one, indented like its neighbours.
+ *
+ * A name enabled here is also dropped from a top-level `"disabled": [ … ]` list,
+ * so "on" cannot be silently overridden by a list the user parked it in.
+ *
+ * @returns `{ ok: true, text, changed }` or `{ ok: false, error }`.
+ */
+function rewriteLocalConfig(rawText, desiredServers) {
+  const text = String(rawText)
+  const parsed = parseJsoncTree(text)
+  if (!parsed.ok) return { ok: false, error: parsed.error }
+  const located = locateServersArray(parsed.root)
+  if (located === undefined) {
+    return { ok: false, error: 'expected an array of servers, or an object with a "servers" array' }
+  }
+  const desired = new Map()
+  for (const server of Array.isArray(desiredServers) ? desiredServers : []) {
+    const config = validateServerInput(server)
+    const enabled = server.enabled !== false
+    desired.set(config.serverName, { config, enabled, entry: storedEntry(config, enabled) })
+  }
+
+  const edits = []
+  const items = located.array.items
+  /** Existing names, so the pane learns what a rewrite would drop. */
+  const existing = new Map()
+  const doomed = new Map()
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]
+    const nameProp = item.type === 'object'
+      ? item.props.find((prop) => prop.key === 'serverName' && prop.value.type === 'scalar')
+      : undefined
+    const name = nameProp === undefined ? undefined : tokenStringValue(nameProp.value.token)
+    const wanted = name === undefined ? undefined : desired.get(name)
+    if (name !== undefined) existing.set(name, true)
+    if (wanted === undefined) {
+      doomed.set(item, true) // deleted (or unnameable): drop the entry and one separator
+      continue
+    }
+    // compare with what is stored, not with its formatting
+    let stored
+    let storedEnabled = true
+    try {
+      const raw = parseJsonc(text.slice(item.start, item.end))
+      if (raw.ok && isPlainObject(raw.value)) {
+        stored = validateServerInput(raw.value)
+        storedEnabled = raw.value.enabled !== false
+        if (located.disabled !== undefined
+          && located.disabled.items.some((node) => tokenStringValue(node.token) === name)) {
+          storedEnabled = false
+        }
+      }
+    } catch { stored = undefined }
+    const same = stored !== undefined
+      && stableStringify(storedEntry(stored, storedEnabled)) === stableStringify(wanted.entry)
+    if (!same) {
+      edits.push({
+        start: item.start,
+        end: item.end,
+        text: prettyEntry(wanted.entry, lineIndentAt(text, item.start)),
+      })
+    }
+  }
+  for (const span of deleteSpans(parsed.tokens, located.array, items, (index) => doomed.has(items[index]))) {
+    edits.push({ ...span, text: '' })
+  }
+
+  // a name the pane switched on must not stay parked in the top-level list
+  if (located.disabled !== undefined) {
+    const nodes = located.disabled.items
+    const unname = (index) => {
+      const name = tokenStringValue(nodes[index].token)
+      const wanted = name === undefined ? undefined : desired.get(name)
+      return wanted !== undefined && wanted.enabled !== false
+    }
+    for (const span of deleteSpans(parsed.tokens, located.disabled, nodes, unname)) {
+      edits.push({ ...span, text: '' })
+    }
+  }
+
+  // appended entries: after the last one, indented like the file already is.
+  // Two phases on purpose — the appends are placed into the text the removals
+  // and replacements already produced, so an entry that was just deleted can
+  // never be the anchor they are written behind.
+  const appended = []
+  for (const [name, wanted] of desired) {
+    if (existing.has(name)) continue
+    appended.push(wanted)
+  }
+  let next = edits.length === 0 ? text : applyTextEdits(text, edits)
+  if (appended.length > 0) {
+    const placed = parseJsoncTree(next)
+    const target = placed.ok ? locateServersArray(placed.root) : undefined
+    if (target === undefined) return { ok: false, error: 'the rewritten file lost its "servers" array' }
+    const list = target.array.items
+    const closeIndent = lineIndentAt(next, target.array.end - 1)
+    const last = list[list.length - 1]
+    const itemIndent = last === undefined ? closeIndent + '  ' : lineIndentAt(next, last.start)
+    const body = appended.map((wanted) => prettyEntry(wanted.entry, itemIndent)).join(',\n' + itemIndent)
+    next = last === undefined
+      ? next.slice(0, target.array.end - 1) + `\n${itemIndent}${body}\n${closeIndent}` + next.slice(target.array.end - 1)
+      : next.slice(0, last.end) + `,\n${itemIndent}${body}` + next.slice(last.end)
+  }
+
+  if (next === text) return { ok: true, text, changed: false }
+  // never persist something the reader would then report as broken
+  const check = parseJsonc(next)
+  if (!check.ok) return { ok: false, error: `the rewritten file would not parse: ${check.error}` }
+  return { ok: true, text: next, changed: true }
+}
+
+/**
+ * The text a brand-new `mcp.local.jsonc` starts from: a header that says who
+ * owns what, then the entries.
+ */
+function newLocalConfigText(servers) {
+  const header = [
+    '// 手写 MCP 配置 —— 由「MCP 管理」页面创建/更新。',
+    '// 这个文件是本插件唯一的 server 来源：页面上改条目、开关都在这里落盘。',
+    '// JSONC：// 与 /* */ 注释、尾随逗号都可以用；页面只重写被改动的那一条，',
+    '// 其它行（含注释）保持原样。',
+  ].join('\n')
+  const list = (Array.isArray(servers) ? servers : []).map((server) => {
+    const source = isPlainObject(server) && isPlainObject(server.config) ? server.config : server
+    const enabled = isPlainObject(server) && server.enabled === false ? false : true
+    return prettyEntry(storedEntry(validateServerInput(source), enabled), '    ')
+  })
+  const body = list.length === 0 ? '[]' : `[\n    ${list.join(',\n    ')}\n  ]`
+  return `${header}\n{\n  "servers": ${body}\n}\n`
 }
 
 // ── loader / tools helpers (pure; the caller supplies the services) ──────
@@ -603,6 +1128,11 @@ function publicServer(record) {
     // whether this page's switch can do anything for the row
     switchable: record.switchable === true,
     live: record.live === true,
+    // true when the entry lives in mcp.local.jsonc, so the pane can edit it
+    editable: record.editable === true,
+    // true when this page mounted it, so the pane can restart the process
+    restartable: record.restartable === true,
+    relatedFiles: Array.isArray(record.relatedFiles) ? record.relatedFiles : [],
     // true when another source declares this same name: the others are ignored,
     // because dsh-mcp-client refuses a duplicate serverName
     alsoDeclared: record.alsoDeclared === true,
@@ -697,6 +1227,9 @@ function listServers(loader, state, schemas, local) {
       switchable: false,
       enabled: true,
       live: entry.live,
+      editable: false,
+      restartable: false,
+      relatedFiles: relatedFilesOf(entry.config),
       toolCount: toolsOfServer(schemas, entry.config.serverName).length,
       command: entry.config.command,
       args: entry.config.args,
@@ -727,6 +1260,9 @@ function listServers(loader, state, schemas, local) {
       switchable: !inFile,
       enabled: forced || inFile,
       live: own !== undefined && own.live,
+      editable: true,
+      restartable: true,
+      relatedFiles: relatedFilesOf(server),
       toolCount: toolsOfServer(schemas, server.serverName).length,
       command: server.command,
       args: server.args,
@@ -751,6 +1287,9 @@ function listServers(loader, state, schemas, local) {
       switchable: false,
       enabled: true,
       live: entry.live,
+      editable: false,
+      restartable: true,
+      relatedFiles: relatedFilesOf(entry.config),
       toolCount: toolsOfServer(schemas, entry.config.serverName).length,
       command: entry.config.command,
       args: entry.config.args,
@@ -792,6 +1331,7 @@ module.exports = {
   MANAGED_ENTRY_PREFIX,
   SERVER_NAME_RE,
   JS_ENV_RE,
+  RELATED_FILES_LIMIT,
   dshHome,
   stateDir,
   stateFile,
@@ -801,6 +1341,7 @@ module.exports = {
   validateServerInput,
   normalizeArgs,
   normalizeStringMap,
+  normalizeRelatedFiles,
   mcpClientConfig,
   reviveJsValues,
   loaderServers,
@@ -808,9 +1349,20 @@ module.exports = {
   mountedBy,
   readLocalConfig,
   parseJsonc,
+  parseJsoncTree,
+  rewriteLocalConfig,
+  newLocalConfigText,
+  storedEntry,
+  stableStringify,
+  prettyEntry,
+  displayPath,
+  isInsideStateDir,
+  isAbsoluteFilePath,
+  relatedFilesOf,
+  serverFingerprint,
   toolsOfServer,
   listServers,
   mountableServers,
   publicServer,
-  __internals: { emptyState, isPlainObject, envRefName },
+  __internals: { emptyState, isPlainObject, envRefName, locateServersArray, lineIndentAt, applyTextEdits },
 }
