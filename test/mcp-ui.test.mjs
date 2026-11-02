@@ -131,11 +131,11 @@ const sshRow = {
   alsoDeclared: false,
   toolCount: 4,
   command: 'npx',
-  args: ['-y', '@fangjunjie/ssh-mcp-server', '--config-file', 'C:\\Users\\a\\.dsh\\skills-management\\ssh-config.json'],
+  args: ['-y', '@fangjunjie/ssh-mcp-server', '--config-file', 'C:\\Users\\example\\.dsh\\skills-management\\ssh-config.json'],
   env: {},
   toolCallTimeoutMs: 30000,
   relatedFiles: [{
-    path: 'C:\\Users\\a\\.dsh\\skills-management\\ssh-config.json',
+    path: 'C:\\Users\\example\\.dsh\\skills-management\\ssh-config.json',
     display: '~/.dsh/skills-management/ssh-config.json',
     origin: 'detected',
     exists: true,
